@@ -21,23 +21,33 @@ class TravelSearchArgs(BaseModel):
     trip requests into structured parameters.
     
     Attributes:
-        origin: Departure city or airport code (e.g., "LAX", "New York")
-        destination: Arrival city or airport code (e.g., "NRT", "Tokyo")
+        origin: Departure airport code (e.g., "LAX", "JFK") - used for flight searches
+        destination: Arrival airport code (e.g., "NRT", "CDG") - used for flight searches
+        origin_city: Original departure city name (e.g., "New York") - used for display
+        destination_city: Original arrival city name (e.g., "Tokyo", "Paris") - used for hotel searches
         start_date: Trip start date in YYYY-MM-DD format
         end_date: Trip end date in YYYY-MM-DD format
         has_all_params: Whether all required parameters were extracted
         missing_params: Description of any missing parameters
     
     Example user input: "Find me flights from LAX to Tokyo, Jan 15-22, 2026"
-    Extracted: origin="LAX", destination="Tokyo", start_date="2026-01-15", end_date="2026-01-22"
+    Extracted: origin="LAX", destination="NRT", destination_city="Tokyo", ...
     """
     origin: Optional[str] = Field(
         default=None,
-        description="Departure city name or airport code (e.g., 'LAX', 'New York', 'JFK')"
+        description="Departure airport code (e.g., 'LAX', 'JFK') - converted from city name"
     )
     destination: Optional[str] = Field(
         default=None,
-        description="Arrival city name or airport code (e.g., 'NRT', 'Tokyo', 'Paris')"
+        description="Arrival airport code (e.g., 'NRT', 'CDG') - converted from city name"
+    )
+    origin_city: Optional[str] = Field(
+        default=None,
+        description="Original departure city name before airport code conversion (e.g., 'New York', 'Los Angeles')"
+    )
+    destination_city: Optional[str] = Field(
+        default=None,
+        description="Original arrival city name before airport code conversion (e.g., 'Tokyo', 'Paris') - used for hotel searches"
     )
     start_date: Optional[str] = Field(
         default=None,

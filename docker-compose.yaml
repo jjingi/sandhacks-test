@@ -38,6 +38,7 @@ services:
       - SERPAPI_API_KEY=${SERPAPI_API_KEY}
       - FLIGHT_AGENT_HOST=0.0.0.0
       - FLIGHT_AGENT_PORT=9001
+      - ENABLE_HTTP=true
     ports:
       - "9001:9001"
     depends_on:
@@ -62,6 +63,7 @@ services:
       - SERPAPI_API_KEY=${SERPAPI_API_KEY}
       - HOTEL_AGENT_HOST=0.0.0.0
       - HOTEL_AGENT_PORT=9002
+      - ENABLE_HTTP=true
     ports:
       - "9002:9002"
     depends_on:
@@ -284,14 +286,16 @@ services:
     image: ghcr.io/agntcy/dir-ctl:latest
     container_name: dir-mcp-server
     stdin_open: true
-    tty: false
+    tty: true
     command: ["mcp", "serve"]
     environment:
       - DIRECTORY_CLIENT_SERVER_ADDRESS=dir-api-server:8888
       - DIRECTORY_CLIENT_TLS_SKIP_VERIFY=true
       - OASF_API_VALIDATION_DISABLE=true
     depends_on:
-      - dir-api-server
+      dir-api-server:
+        condition: service_healthy
+    restart: unless-stopped
 
   # Zot OCI registry for agent artifacts
   zot:

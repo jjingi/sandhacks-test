@@ -1,54 +1,36 @@
 # Travel Supervisor Dockerfile
 # 
-# This Dockerfile builds the Travel Planning Agent - an AI agent that
-# finds the cheapest flight + hotel combinations using SerpAPI.
-#
-# Build from the lungo/ directory:
-# docker build -f docker/Dockerfile.travel-supervisor -t travel-supervisor .
+# Main travel planning agent that coordinates Flight and Hotel agents via A2A.
+# Based on the original lungo auction-supervisor Dockerfile pattern.
 
-FROM python:3.13-slim
+FROM python:3.13.0-slim
 
-# Set working directory
+# Install system dependencies, including curl, ping, and wget
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git curl wget iputils-ping && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install uv and create virtual environment
+RUN pip install --no-cache-dir uv && \
+    uv venv -q /venv
+ENV PATH="/venv/bin:$PATH"
+
+# Set PYTHONPATH to include the application directory
+ENV PYTHONPATH="/app"
+
 WORKDIR /app
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked --no-editable
 
-# Install system dependencies
-# - curl: For health checks
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+COPY . .
 
-# Install uv for faster dependency installation
-RUN pip install --no-cache-dir uv
-
-# Copy dependency files first for better layer caching
-COPY pyproject.toml ./
-COPY uv.lock ./
-
-# Install Python dependencies
-RUN uv pip install --system --no-cache -e .
-
-# Copy application source code
-COPY agents/ ./agents/
-COPY common/ ./common/
-COPY config/ ./config/
-COPY services/ ./services/
-
-# Create about.properties for version info
-RUN echo "build.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > about.properties && \
+# Generate about.properties file with build metadata
+RUN echo "app.name=travel-supervisor" > about.properties && \
+    echo "app.service=travel-supervisor" >> about.properties && \
+    echo "build.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> about.properties && \
     echo "git.commit=local" >> about.properties && \
     echo "git.tag=dev" >> about.properties
 
-# Set Python path to include the app directory
-ENV PYTHONPATH=/app
-
-# Expose the API port
-# Travel supervisor runs on port 8000
-EXPOSE 8000
-
-# Health check endpoint
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
-# Run the travel supervisor server
-# Uses uvicorn with the FastAPI application
-CMD ["python", "-m", "uvicorn", "agents.supervisors.travel.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the travel supervisor server (same pattern as original)
+CMD ["uv", "run", "python", "agents/supervisors/travel/main.py"]
