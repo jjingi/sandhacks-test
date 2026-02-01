@@ -26,54 +26,65 @@ async def search_flights(
     origin: str,
     destination: str,
     outbound_date: str,
-    return_date: str,
+    return_date: str = None,
     include_return_flights: bool = True,
 ) -> list[dict]:
     """
     Search for flights using SerpAPI's Google Flights engine.
     
-    This function queries SerpAPI for round-trip flights sorted by price (lowest first).
-    It extracts the arrival time of the last leg of the outbound flight, which is used
-    for hotel check-in timing constraints.
+    Supports both round-trip and one-way flights:
+    - Round-trip: queries with type=1, optionally fetches return flight details
+    - One-way: queries with type=2, no return date needed
     
-    Optionally fetches return flight options separately to provide complete trip info.
+    This function extracts the arrival time of the last leg of the outbound flight,
+    which is used for hotel check-in timing constraints.
     
     Args:
         origin: Departure airport code (e.g., "LAX", "JFK") or city name
         destination: Arrival airport code or city name
         outbound_date: Departure date in YYYY-MM-DD format
-        return_date: Return date in YYYY-MM-DD format
-        include_return_flights: If True, fetch return flight options (default: True)
+        return_date: Return date in YYYY-MM-DD format (optional for one-way)
+        include_return_flights: If True, fetch return flight options for round-trip (default: True)
+                               Set to False for one-way flights.
     
     Returns:
         List of flight dictionaries containing:
-        - price: Total price in USD (round-trip)
+        - price: Total price in USD (round-trip or one-way)
         - departure_time: Outbound flight departure time
         - arrival_time: Outbound flight arrival time (last leg)
         - airline: Primary airline name
         - duration_minutes: Total flight duration
         - stops: Number of stops
         - flights: Full flight legs data from API
-        - return_flight: Best matching return flight info (if include_return_flights=True)
+        - return_flight: Best matching return flight info (if include_return_flights=True and round-trip)
     
     Raises:
         Exception: If SerpAPI call fails or returns an error
     
-    Example:
+    Example (round-trip):
         >>> flights = await search_flights("LAX", "NRT", "2026-01-15", "2026-01-22")
-        >>> print(flights[0]["price"])  # Cheapest flight price
-        >>> print(flights[0]["return_flight"])  # Return flight details
+        >>> print(flights[0]["price"])  # Cheapest round-trip price
+    
+    Example (one-way):
+        >>> flights = await search_flights("SEA", "SAN", "2026-02-20", include_return_flights=False)
+        >>> print(flights[0]["price"])  # Cheapest one-way price
     """
-    logger.info(f"Searching flights: {origin} -> {destination}, {outbound_date} to {return_date}")
+    # Determine if this is a one-way search
+    is_one_way = not include_return_flights or not return_date
+    trip_type = "one-way" if is_one_way else "round-trip"
+    
+    logger.info(f"Searching {trip_type} flights: {origin} -> {destination}, {outbound_date}" + 
+                (f" to {return_date}" if return_date and not is_one_way else ""))
     
     # Validate API key is configured
     if not SERPAPI_API_KEY:
         logger.error("SERPAPI_API_KEY is not configured")
         raise ValueError("SerpAPI key is not configured. Please set SERPAPI_API_KEY in your environment.")
     
-    # Build SerpAPI request parameters for OUTBOUND flights
+    # Build SerpAPI request parameters
     # engine=google_flights: Use Google Flights data source
     # type=1: Round trip flight search
+    # type=2: One way flight search
     # sort_by=2: Sort results by price (lowest first)
     params = {
         "engine": "google_flights",
@@ -81,11 +92,14 @@ async def search_flights(
         "departure_id": origin.upper(),  # Airport codes should be uppercase
         "arrival_id": destination.upper(),
         "outbound_date": outbound_date,
-        "return_date": return_date,
-        "type": "1",  # 1 = Round trip, 2 = One way
+        "type": "2" if is_one_way else "1",  # 1 = Round trip, 2 = One way
         "sort_by": "2",  # Sort by price
         "currency": "USD",
     }
+    
+    # Only include return_date for round-trip searches
+    if not is_one_way and return_date:
+        params["return_date"] = return_date
     
     try:
         # Make async HTTP request to SerpAPI for outbound flights
@@ -113,9 +127,10 @@ async def search_flights(
         
         logger.info(f"Found {len(all_flights)} outbound flights")
         
-        # Fetch return flight options if requested
+        # Fetch return flight options if requested (only for round-trip flights)
         # This makes a separate search for the return leg to get actual return times
-        if include_return_flights and all_flights:
+        # Skip for one-way flights (is_one_way=True or no return_date)
+        if include_return_flights and all_flights and return_date and not is_one_way:
             return_flights = await _search_return_flights(
                 destination, origin, return_date
             )

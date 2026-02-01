@@ -188,6 +188,8 @@ Based on the user's message, respond with ONE of these options:
     * Booking hotels or accommodation
     * Planning a trip with origin, destination, or dates
     * Comparing travel prices
+    * Things to do, activities, or attractions at a location
+    * What to see or visit in a city
     * Any travel-related query
 - 'general' - if the message is:
     * A greeting or general question
@@ -245,81 +247,221 @@ Respond with ONLY 'travel_search' or 'general':""",
             logger.error(f"Failed to extract travel params: {e}")
             return {"messages": [AIMessage(content="I had trouble understanding your request. Could you please specify your origin, destination, and travel dates?")]}
 
-        # Step 2: Check for missing parameters
-        if not params.has_all_params:
-            missing = params.missing_params or "some details"
-            clarification_msg = f"I'd be happy to help plan your trip! To find the best flight and hotel deals, I need a few more details:\n\n"
-            
-            if not params.origin:
-                clarification_msg += "- **Origin**: Where will you be departing from? (city or airport code)\n"
-            if not params.destination:
-                clarification_msg += "- **Destination**: Where do you want to go?\n"
-            if not params.start_date:
-                clarification_msg += "- **Start Date**: When do you want to leave? (YYYY-MM-DD)\n"
-            if not params.end_date:
-                clarification_msg += "- **End Date**: When do you want to return?\n"
-            
-            return {"messages": [AIMessage(content=clarification_msg)], "search_params": params.model_dump()}
+        # Step 2: Validate dates are not in the past (skip for activity_only which doesn't need dates)
+        search_type = params.search_type or "full_trip"
+        if search_type != "activity_only":
+            date_error = self._validate_dates(params)
+            if date_error:
+                return {"messages": [AIMessage(content=date_error)]}
 
-        # Step 3: Search for flights and hotels via A2A agents
-        logger.info(f"Searching via A2A: {params.origin} -> {params.destination}, {params.start_date} to {params.end_date}")
+        # Step 3: Route based on search type
+        logger.info(f"Search type detected: {search_type}")
+        
+        # Handle each search type separately
+        if search_type == "activity_only":
+            return await self._handle_activity_only_search(params)
+        elif search_type == "hotel_only":
+            return await self._handle_hotel_only_search(params)
+        elif search_type == "flight_only":
+            return await self._handle_flight_only_search(params)
+        else:
+            # Default: full_trip (flight + hotel + activities)
+            return await self._handle_full_trip_search(params)
+
+    async def _handle_activity_only_search(self, params: TravelSearchArgs) -> dict:
+        """
+        Handle activity-only search requests.
+        
+        Only searches for things to do at a location, no flights or hotels.
+        """
+        # Check required params: just need a location
+        location = params.location or params.destination_city or params.destination
+        
+        if not location:
+            return {"messages": [AIMessage(content=
+                "I'd be happy to find activities for you! Just tell me:\n\n"
+                "- **Location**: What city would you like to explore?\n\n"
+                "Example: 'What things to do in San Francisco?'"
+            )]}
+        
+        logger.info(f"Searching activities only for location: {location}")
         
         try:
-            # Search for flights via A2A to Flight Agent
-            logger.info("Sending A2A request to Flight Search Agent...")
+            activities = await get_activities_via_a2a(location, "things to do")
+            
+            if not activities:
+                return {"messages": [AIMessage(content=f"I couldn't find any activities in {location}. Please try another location.")]}
+            
+            response = self._format_activities_only(activities, location)
+            return {"messages": [AIMessage(content=response)], "full_response": response}
+            
+        except Exception as e:
+            logger.error(f"Error searching activities: {e}")
+            return {"messages": [AIMessage(content=f"I encountered an error searching for activities: {str(e)}")]}
+
+    async def _handle_hotel_only_search(self, params: TravelSearchArgs) -> dict:
+        """
+        Handle hotel-only search requests.
+        
+        Searches for hotels at a location without flights.
+        """
+        # Check required params: location and dates
+        location = params.location or params.destination_city or params.destination
+        
+        if not location:
+            return {"messages": [AIMessage(content=
+                "I'd be happy to find hotels for you! I need a few details:\n\n"
+                "- **Location**: What city are you looking for hotels in?\n"
+                "- **Check-in Date**: When do you want to check in?\n"
+                "- **Check-out Date**: When do you want to check out?\n\n"
+                "Example: 'Find hotels in Paris from March 1 to March 5'"
+            )]}
+        
+        if not params.start_date or not params.end_date:
+            clarification = f"To find hotels in {location}, I need:\n\n"
+            if not params.start_date:
+                clarification += "- **Check-in Date**: When do you want to check in?\n"
+            if not params.end_date:
+                clarification += "- **Check-out Date**: When do you want to check out?\n"
+            return {"messages": [AIMessage(content=clarification)]}
+        
+        logger.info(f"Searching hotels only for location: {location}, {params.start_date} to {params.end_date}")
+        
+        try:
+            hotels = await get_hotels_via_a2a(location, params.start_date, params.end_date)
+            
+            if not hotels:
+                return {"messages": [AIMessage(content=f"I couldn't find any hotels in {location} for those dates. Please try different dates or another location.")]}
+            
+            response = self._format_hotels_only(hotels, location, params)
+            return {"messages": [AIMessage(content=response)], "full_response": response}
+            
+        except Exception as e:
+            logger.error(f"Error searching hotels: {e}")
+            return {"messages": [AIMessage(content=f"I encountered an error searching for hotels: {str(e)}")]}
+
+    async def _handle_flight_only_search(self, params: TravelSearchArgs) -> dict:
+        """
+        Handle flight-only search requests (one-way or round-trip).
+        
+        Searches for flights without hotels.
+        """
+        # Check required params: origin, destination, start_date
+        if not params.origin or not params.destination:
+            clarification = "I'd be happy to find flights for you! I need:\n\n"
+            if not params.origin:
+                clarification += "- **Origin**: Where are you flying from?\n"
+            if not params.destination:
+                clarification += "- **Destination**: Where are you flying to?\n"
+            if not params.start_date:
+                clarification += "- **Date**: When do you want to fly?\n"
+            clarification += "\nExample: 'Find flights from Seattle to San Diego on Feb 20'"
+            return {"messages": [AIMessage(content=clarification)]}
+        
+        if not params.start_date:
+            return {"messages": [AIMessage(content=
+                f"When would you like to fly from {params.origin} to {params.destination}?\n\n"
+                "Please provide a date (e.g., 'Feb 20' or '2026-02-20')"
+            )]}
+        
+        trip_type = "one-way" if params.is_one_way else "round-trip"
+        logger.info(f"Searching {trip_type} flights only: {params.origin} -> {params.destination}")
+        
+        try:
             flights = await get_flights_via_a2a(
                 params.origin,
                 params.destination,
                 params.start_date,
-                params.end_date,
+                params.end_date if not params.is_one_way else None,
+                is_one_way=params.is_one_way,
             )
             
             if not flights:
-                return {"messages": [AIMessage(content=f"I couldn't find any flights from {params.origin} to {params.destination} for those dates. The Flight Agent may be unavailable. Please try again.")]}
+                return {"messages": [AIMessage(content=f"I couldn't find any flights from {params.origin} to {params.destination} for {params.start_date}. Please try different dates.")]}
+            
+            response = self._format_flights_only(flights, params)
+            return {"messages": [AIMessage(content=response)], "full_response": response}
+            
+        except Exception as e:
+            logger.error(f"Error searching flights: {e}")
+            return {"messages": [AIMessage(content=f"I encountered an error searching for flights: {str(e)}")]}
 
-            # Search for hotels via A2A to Hotel Agent
-            # Use destination_city (city name like "Paris") not destination (airport code like "CDG")
-            # Google Hotels needs city names, not airport codes
-            hotel_location = params.destination_city or params.destination
-            logger.info(f"Sending A2A request to Hotel Search Agent for location: {hotel_location}")
-            hotels = await get_hotels_via_a2a(
-                hotel_location,
+    async def _handle_full_trip_search(self, params: TravelSearchArgs) -> dict:
+        """
+        Handle full trip search (flight + hotel + activities).
+        
+        This is the original behavior - searches for flights, hotels, and activities.
+        """
+        # Check required params for full trip
+        if not params.origin or not params.destination or not params.start_date:
+            clarification = "I'd be happy to plan your trip! I need a few details:\n\n"
+            if not params.origin:
+                clarification += "- **Origin**: Where will you be departing from?\n"
+            if not params.destination:
+                clarification += "- **Destination**: Where do you want to go?\n"
+            if not params.start_date:
+                clarification += "- **Departure Date**: When do you want to leave?\n"
+            if not params.is_one_way and not params.end_date:
+                clarification += "- **Return Date**: When do you want to return? (or say 'one-way')\n"
+            return {"messages": [AIMessage(content=clarification)], "search_params": params.model_dump()}
+        
+        # For one-way trips, calculate hotel checkout date (1 night stay)
+        hotel_checkout_date = params.end_date
+        if params.is_one_way or not params.end_date:
+            try:
+                start_dt = datetime.strptime(params.start_date.strip()[:10], "%Y-%m-%d")
+                checkout_dt = start_dt + timedelta(days=1)
+                hotel_checkout_date = checkout_dt.strftime("%Y-%m-%d")
+            except (ValueError, TypeError):
+                hotel_checkout_date = params.start_date
+        
+        trip_type = "one-way" if params.is_one_way else "round-trip"
+        logger.info(f"Searching full trip ({trip_type}): {params.origin} -> {params.destination}")
+        
+        try:
+            # Search for flights
+            flights = await get_flights_via_a2a(
+                params.origin,
+                params.destination,
                 params.start_date,
-                params.end_date,
+                params.end_date if not params.is_one_way else None,
+                is_one_way=params.is_one_way,
             )
             
-            if not hotels:
-                return {"messages": [AIMessage(content=f"I found flights but couldn't find hotels in {hotel_location}. The Hotel Agent may be unavailable.")]}
+            if not flights:
+                return {"messages": [AIMessage(content=f"I couldn't find any flights from {params.origin} to {params.destination}. Please try again.")]}
 
-            # Step 4: Find cheapest valid plan
+            # Search for hotels
+            hotel_location = params.destination_city or params.destination
+            hotels = await get_hotels_via_a2a(hotel_location, params.start_date, hotel_checkout_date)
+            
+            if not hotels:
+                return {"messages": [AIMessage(content=f"I found flights but couldn't find hotels in {hotel_location}.")]}
+
+            # Find cheapest valid plan
             plan = find_cheapest_plan(flights, hotels)
             
             if not plan:
-                # No valid combination found - explain why
                 return {"messages": [AIMessage(content=
-                    f"I found {len(flights)} flights and {len(hotels)} hotels, but couldn't find a combination that works.\n\n"
-                    f"This usually happens when hotel check-in times are too early for your flight arrival. "
-                    f"The system requires at least {TRAVEL_HOTEL_CHECKIN_GAP_HOURS} hours between flight arrival and hotel check-in.\n\n"
-                    f"Try searching for an earlier departure date or a later check-in time."
+                    f"I found {len(flights)} flights and {len(hotels)} hotels, but couldn't find a valid combination.\n\n"
+                    f"This usually happens when hotel check-in times conflict with flight arrival. "
+                    f"Try an earlier departure or later check-in time."
                 )]}
 
-            # Step 5: Search for activities at the destination (optional - don't fail if unavailable)
+            # Search for activities (optional)
             activities = []
             try:
-                logger.info(f"Sending A2A request to Activity Search Agent for location: {hotel_location}")
                 activities = await get_activities_via_a2a(hotel_location, "things to do")
-                logger.info(f"Found {len(activities)} activities at {hotel_location}")
             except Exception as e:
-                logger.warning(f"Activity search failed (continuing without activities): {e}")
-                activities = []
+                logger.warning(f"Activity search failed: {e}")
 
-            # Step 6: Format and return the result with activities
-            response = self._format_travel_plan(plan, params, activities)
+            # Format and return
+            response = self._format_travel_plan(plan, params, activities, hotel_checkout_date)
             return {"messages": [AIMessage(content=response)], "full_response": response}
-
+            
         except Exception as e:
-            logger.error(f"Error during travel search: {e}")
-            return {"messages": [AIMessage(content=f"I encountered an error while searching for your trip: {str(e)}\n\nPlease try again or modify your search criteria.")]}
+            logger.error(f"Error during full trip search: {e}")
+            return {"messages": [AIMessage(content=f"I encountered an error: {str(e)}")]}
 
     async def _extract_travel_params(self, user_message: str) -> TravelSearchArgs:
         """
@@ -342,48 +484,75 @@ Respond with ONLY 'travel_search' or 'general':""",
         # Get current year for date parsing context
         current_year = datetime.now().year
         
-        # Prompt the LLM to extract AND convert to airport codes
+        # Prompt the LLM to extract travel parameters and detect search type
         prompt = f"""Extract travel search parameters from the user's message.
 
 Current year for reference: {current_year}
 
 User message: {user_message}
 
-IMPORTANT RULES:
-- For dates, convert to YYYY-MM-DD format (e.g., "Jan 15" → "{current_year}-01-15")
-- If year is not specified, assume {current_year} or {current_year + 1} (whichever makes sense)
-- ALWAYS convert origin and destination to 3-letter IATA airport codes:
-  * "Los Angeles" or "LA" → "LAX"
-  * "New York" or "NYC" → "JFK" (or "EWR" or "LGA")
-  * "Tokyo" → "NRT" (Narita) or "HND" (Haneda)
-  * "Paris" → "CDG"
-  * "London" → "LHR"
-  * "San Francisco" or "SF" → "SFO"
-  * "Chicago" → "ORD"
-  * "Dallas" → "DFW"
-  * "Miami" → "MIA"
-  * "Seattle" → "SEA"
-  * "Boston" → "BOS"
-  * "Atlanta" → "ATL"
-  * "Denver" → "DEN"
-  * "Las Vegas" → "LAS"
-  * "Orlando" → "MCO"
-  * "Hong Kong" → "HKG"
-  * "Singapore" → "SIN"
-  * "Sydney" → "SYD"
-  * "Dubai" → "DXB"
-  * "Seoul" → "ICN"
-  * "Bangkok" → "BKK"
-  * "Rome" → "FCO"
-  * "Amsterdam" → "AMS"
-  * "Frankfurt" → "FRA"
-  * "Toronto" → "YYZ"
-  * "Vancouver" → "YVR"
-  * "Mexico City" → "MEX"
-  * "Cancun" → "CUN"
-- If already an airport code, use it as-is (uppercase)
-- Set has_all_params to true ONLY if origin, destination, start_date, AND end_date are all present
-- List missing parameters in missing_params field"""
+STEP 1 - DETERMINE SEARCH TYPE:
+Set search_type to ONE of these values:
+- "flight_only" - User wants ONLY flight information:
+  * "find flights from X to Y"
+  * "search for a flight to Paris"
+  * "how much is a flight from LA to NYC"
+  * Does NOT mention hotels or where to stay
+- "hotel_only" - User wants ONLY hotel information:
+  * "find hotels in Tokyo"
+  * "search for places to stay in Paris"
+  * "hotel in San Francisco for March 1-5"
+  * Does NOT mention flights or travel from somewhere
+- "activity_only" - User wants ONLY activities/things to do:
+  * "what to do in San Diego"
+  * "things to do in Paris"
+  * "attractions in Tokyo"
+  * "activities near San Francisco"
+- "full_trip" - User wants a complete trip (flight + hotel):
+  * "plan a trip from LA to Tokyo"
+  * "find flight and hotel from Seattle to San Diego"
+  * "I want to travel from NYC to Paris"
+  * Mentions both origin AND destination with travel intent
+
+STEP 2 - EXTRACT PARAMETERS BASED ON SEARCH TYPE:
+
+For "flight_only":
+- Required: origin, destination, start_date
+- Optional: end_date (if round-trip)
+- Set is_one_way=True if only one date or user says "one way"
+
+For "hotel_only":
+- Required: location (city name), start_date (check-in), end_date (check-out)
+- No origin/destination needed
+
+For "activity_only":
+- Required: location (city name)
+- No dates needed
+
+For "full_trip":
+- Required: origin, destination, start_date
+- Optional: end_date (if round-trip, set is_one_way=True if not provided)
+
+STEP 3 - DATE FORMATTING:
+- Convert to YYYY-MM-DD format (e.g., "Jan 15" → "{current_year}-01-15")
+- If year not specified, use {current_year} or {current_year + 1}
+
+STEP 4 - AIRPORT CODE CONVERSION (for flights):
+Convert city names to 3-letter IATA codes:
+  * "Los Angeles" → "LAX", "New York" → "JFK", "Tokyo" → "NRT"
+  * "Paris" → "CDG", "London" → "LHR", "San Francisco" → "SFO"
+  * "Chicago" → "ORD", "Seattle" → "SEA", "San Diego" → "SAN"
+  * "Miami" → "MIA", "Boston" → "BOS", "Atlanta" → "ATL"
+  * "Las Vegas" → "LAS", "Denver" → "DEN", "Dallas" → "DFW"
+  * "Hong Kong" → "HKG", "Singapore" → "SIN", "Sydney" → "SYD"
+
+STEP 5 - SET has_all_params:
+- For flight_only: True if origin, destination, start_date present (end_date only if round-trip)
+- For hotel_only: True if location, start_date, end_date present
+- For activity_only: True if location present
+- For full_trip: True if origin, destination, start_date present (end_date only if round-trip)
+
+List any missing parameters in missing_params field."""
 
         result = await extraction_llm.ainvoke(prompt)
         logger.info(f"Extracted params: {result}")
@@ -586,16 +755,267 @@ IMPORTANT RULES:
         
         return params
 
-    def _format_travel_plan(self, plan: dict, params: TravelSearchArgs, activities: list = None) -> str:
+    def _validate_dates(self, params: TravelSearchArgs) -> str:
+        """
+        Validate that travel dates are not in the past.
+        
+        Args:
+            params: Travel search parameters with dates
+            
+        Returns:
+            Error message if dates are invalid, empty string if valid
+        """
+        today = datetime.now().date()
+        
+        # Check start_date
+        if params.start_date:
+            try:
+                start_date = datetime.strptime(params.start_date.strip()[:10], "%Y-%m-%d").date()
+                if start_date < today:
+                    days_ago = (today - start_date).days
+                    return (
+                        f"⚠️ **Date Already Passed**\n\n"
+                        f"The date you entered ({params.start_date}) was {days_ago} day{'s' if days_ago > 1 else ''} ago.\n\n"
+                        f"Today is **{today.strftime('%Y-%m-%d')}**.\n\n"
+                        f"Please enter a future date for your search."
+                    )
+            except (ValueError, TypeError):
+                pass  # Invalid date format - let other validation handle it
+        
+        # Check end_date if provided
+        if params.end_date:
+            try:
+                end_date = datetime.strptime(params.end_date.strip()[:10], "%Y-%m-%d").date()
+                if end_date < today:
+                    days_ago = (today - end_date).days
+                    return (
+                        f"⚠️ **Date Already Passed**\n\n"
+                        f"The return/end date you entered ({params.end_date}) was {days_ago} day{'s' if days_ago > 1 else ''} ago.\n\n"
+                        f"Today is **{today.strftime('%Y-%m-%d')}**.\n\n"
+                        f"Please enter future dates for your search."
+                    )
+                
+                # Also check if end_date is before start_date
+                if params.start_date:
+                    start_date = datetime.strptime(params.start_date.strip()[:10], "%Y-%m-%d").date()
+                    if end_date < start_date:
+                        return (
+                            f"⚠️ **Invalid Date Range**\n\n"
+                            f"Your return date ({params.end_date}) is before your departure date ({params.start_date}).\n\n"
+                            f"Please make sure the return date comes after the departure date."
+                        )
+            except (ValueError, TypeError):
+                pass  # Invalid date format - let other validation handle it
+        
+        return ""  # No errors
+
+    def _format_activities_only(self, activities: list, location: str) -> str:
+        """
+        Format activity-only search results.
+        
+        Shows a list of things to do at the specified location.
+        """
+        response = f"""🎯 **Things to Do in {location}**
+
+Here are the top activities and attractions I found:
+
+"""
+        for i, activity in enumerate(activities[:10], 1):
+            name = activity.get('name', 'Unknown')
+            rating = activity.get('rating', 0)
+            reviews = activity.get('reviews', 0)
+            activity_type = activity.get('type', '')
+            address = activity.get('address', '')
+            
+            rating_str = f"⭐ {rating}" if rating else ""
+            reviews_str = f"({reviews:,} reviews)" if reviews else ""
+            type_str = f" - {activity_type}" if activity_type else ""
+            
+            response += f"**{i}. {name}**{type_str}\n"
+            if address:
+                response += f"   📍 {address}\n"
+            if rating_str or reviews_str:
+                response += f"   {rating_str} {reviews_str}\n"
+            response += "\n"
+
+        response += f"""---
+
+Would you like more details about any of these, or should I search for flights and hotels to {location}?"""
+        
+        return response
+
+    def _format_hotels_only(self, hotels: list, location: str, params: TravelSearchArgs) -> str:
+        """
+        Format hotel-only search results.
+        
+        Shows a list of hotels at the specified location for the given dates,
+        sorted by overall rating (best first) and filtered to show quality options.
+        """
+        # Calculate number of nights
+        try:
+            start_dt = datetime.strptime(params.start_date.strip()[:10], "%Y-%m-%d")
+            end_dt = datetime.strptime(params.end_date.strip()[:10], "%Y-%m-%d")
+            nights = max(1, (end_dt - start_dt).days)
+        except (ValueError, TypeError, AttributeError):
+            nights = 1
+        
+        nights_text = f"{nights} night{'s' if nights != 1 else ''}"
+        
+        # Sort hotels by overall rating (descending), then by price (ascending)
+        sorted_hotels = sorted(
+            hotels,
+            key=lambda h: (
+                -(h.get('overall_rating', 0) or h.get('rating', 0) or 0),  # Higher rating first
+                h.get('price', float('inf')) or float('inf')  # Lower price second
+            )
+        )
+        
+        response = f"""🏨 **Top Hotels in {location}**
+
+Dates: {params.start_date} to {params.end_date} ({nights_text})
+Sorted by rating (best first):
+
+"""
+        for i, hotel in enumerate(sorted_hotels[:10], 1):
+            name = hotel.get('name', 'Unknown Hotel')
+            price_per_night = hotel.get('price', 0) or 0
+            total_price = price_per_night * nights
+            overall_rating = hotel.get('overall_rating', 0) or hotel.get('rating', 0) or 0
+            location_rating = hotel.get('location_rating', 0) or 0
+            check_in = hotel.get('check_in_time', '3:00 PM')
+            
+            # Format rating with stars
+            if overall_rating:
+                stars = int(overall_rating)
+                half = '½' if overall_rating % 1 >= 0.5 else ''
+                rating_str = f"{'⭐' * stars}{half} ({overall_rating:.1f}/5)"
+            else:
+                rating_str = "N/A"
+            
+            location_str = f"📍 Location: {location_rating:.1f}/5" if location_rating else ""
+            
+            response += f"**{i}. {name}**\n"
+            response += f"   💰 ${price_per_night:.2f}/night × {nights} = **${total_price:.2f} total**\n"
+            response += f"   {rating_str}"
+            if location_str:
+                response += f" | {location_str}"
+            response += f"\n"
+            response += f"   🕐 Check-in: {check_in}\n"
+            response += "\n"
+
+        response += f"""---
+
+Would you like me to also find flights to {location}?"""
+        
+        return response
+
+    def _format_flights_only(self, flights: list, params: TravelSearchArgs) -> str:
+        """
+        Format flight-only search results.
+        
+        Shows a list of flights for the given route and dates with duration and layover info.
+        """
+        is_one_way = params.is_one_way
+        trip_type = "One-Way" if is_one_way else "Round-Trip"
+        route = f"{params.origin} → {params.destination}"
+        
+        response = f"""✈️ **{trip_type} Flights: {route}**
+
+"""
+        if is_one_way:
+            response += f"Date: {params.start_date}\n\n"
+        else:
+            response += f"Dates: {params.start_date} to {params.end_date}\n\n"
+
+        response += "Here are the best flight options:\n\n"
+        
+        for i, flight in enumerate(flights[:10], 1):
+            price = flight.get('price', 0) or 0
+            airline = flight.get('airline', 'Unknown')
+            departure = flight.get('departure_time', 'N/A')
+            arrival = flight.get('arrival_time', 'N/A')
+            stops = flight.get('stops', 0)
+            duration_minutes = flight.get('duration_minutes', 0) or 0
+            
+            # Format duration
+            if duration_minutes > 0:
+                hours = duration_minutes // 60
+                mins = duration_minutes % 60
+                duration_str = f"{hours}h {mins}m" if mins > 0 else f"{hours}h"
+            else:
+                duration_str = "N/A"
+            
+            stops_text = "Non-stop" if stops == 0 else f"{stops} stop{'s' if stops > 1 else ''}"
+            
+            response += f"**{i}. {airline}** - ${price:.2f}\n"
+            response += f"   🛫 {departure} → 🛬 {arrival}\n"
+            response += f"   ⏱️ {duration_str} | {stops_text}\n"
+            
+            # Show layover details if there are stops
+            if stops > 0:
+                flight_legs = flight.get('flights', [])
+                if len(flight_legs) > 1:
+                    layover_info = []
+                    for j in range(len(flight_legs) - 1):
+                        leg = flight_legs[j]
+                        next_leg = flight_legs[j + 1]
+                        # Get layover airport (arrival of current leg)
+                        layover_airport = leg.get('arrival_airport', {}).get('id', '') or leg.get('arrival_code', '')
+                        # Calculate layover duration if available
+                        layover_duration = next_leg.get('layover_duration', 0)
+                        if layover_duration:
+                            lh = layover_duration // 60
+                            lm = layover_duration % 60
+                            layover_str = f"{lh}h {lm}m" if lm > 0 else f"{lh}h"
+                            layover_info.append(f"{layover_airport} ({layover_str})")
+                        elif layover_airport:
+                            layover_info.append(layover_airport)
+                    if layover_info:
+                        response += f"   🔄 Layover: {', '.join(layover_info)}\n"
+            
+            # Show return flight info for round-trip
+            if not is_one_way and flight.get('return_flight'):
+                ret = flight['return_flight']
+                ret_departure = ret.get('departure_time', 'N/A')
+                ret_arrival = ret.get('arrival_time', 'N/A')
+                ret_stops = ret.get('stops', 0)
+                ret_duration = ret.get('duration_minutes', 0) or 0
+                ret_stops_text = "Non-stop" if ret_stops == 0 else f"{ret_stops} stop{'s' if ret_stops > 1 else ''}"
+                
+                if ret_duration > 0:
+                    rh = ret_duration // 60
+                    rm = ret_duration % 60
+                    ret_duration_str = f"{rh}h {rm}m" if rm > 0 else f"{rh}h"
+                else:
+                    ret_duration_str = ""
+                    
+                duration_info = f" ({ret_duration_str})" if ret_duration_str else ""
+                response += f"   🔙 Return: {ret_departure} → {ret_arrival}{duration_info} | {ret_stops_text}\n"
+            
+            response += "\n"
+
+        price_label = "one-way" if is_one_way else "round-trip"
+        response += f"""---
+
+Prices shown are {price_label}. Would you like me to also find hotels at {params.destination_city or params.destination}?"""
+        
+        return response
+
+    def _format_travel_plan(self, plan: dict, params: TravelSearchArgs, activities: list = None, hotel_checkout_date: str = None) -> str:
         """
         Format a travel plan with markdown-style sections: total cost,
         outbound flight, return flight (with full details when available),
         hotel details, activities, and trip summary.
         
+        Supports both one-way and round-trip flights:
+        - One-way: Shows single flight, 1 night hotel
+        - Round-trip: Shows outbound + return flights, full hotel stay
+        
         Args:
             plan: Travel plan with flight and hotel info
             params: Travel search parameters
             activities: Optional list of activities at the destination
+            hotel_checkout_date: Checkout date for hotel (used for one-way trips)
         """
         if activities is None:
             activities = []
@@ -603,6 +1023,7 @@ IMPORTANT RULES:
         flight = plan["flight"]
         hotel = plan["hotel"]
         return_flight = flight.get("return_flight")
+        is_one_way = params.is_one_way
 
         outbound_stops = flight.get("stops", 0)
         outbound_stops_text = "(Non-stop)" if outbound_stops == 0 else f"({outbound_stops} stop{'s' if outbound_stops > 1 else ''})"
@@ -613,11 +1034,16 @@ IMPORTANT RULES:
         location_display = f"{location_rating:.1f}/5" if location_rating else "N/A"
 
         # Calculate number of nights for hotel total cost
-        # Google Hotels returns per-night price, so we multiply by nights
+        # For one-way trips, use the calculated hotel_checkout_date (1 night)
+        # For round-trip, use end_date
         try:
             start_dt = datetime.strptime(params.start_date.strip()[:10], "%Y-%m-%d")
-            end_dt = datetime.strptime(params.end_date.strip()[:10], "%Y-%m-%d")
-            nights = max(1, (end_dt - start_dt).days)
+            if is_one_way:
+                # One-way: 1 night stay
+                nights = 1
+            else:
+                end_dt = datetime.strptime(params.end_date.strip()[:10], "%Y-%m-%d")
+                nights = max(1, (end_dt - start_dt).days)
         except (ValueError, TypeError, AttributeError):
             nights = 1  # Default to 1 night if date parsing fails
 
@@ -633,35 +1059,41 @@ IMPORTANT RULES:
         
         # Format nights text
         nights_text = f"{nights} night{'s' if nights != 1 else ''}"
+        
+        # Trip type label
+        trip_type = "one-way" if is_one_way else "round-trip"
+        flight_price_label = f"(one-way)" if is_one_way else "(round-trip)"
 
-        response = f"""🎉 **Great news! I found the best deal for your trip!**
+        response = f"""🎉 **Great news! I found the best deal for your {trip_type} trip!**
 
 **💰 Total Cost: ${total_price:.2f}**
-- ✈️ Flight: ${flight_price:.2f}
+- ✈️ Flight: ${flight_price:.2f} {flight_price_label}
 - 🏨 Hotel: ${hotel_total_price:.2f} ({nights_text})
 
 ---
 
-✈️ **Outbound Flight** ({params.origin} → {params.destination})
+✈️ **{"Flight" if is_one_way else "Outbound Flight"}** ({params.origin} → {params.destination})
 - **Airline**: {flight.get('airline', 'Unknown')}
-- **Price**: ${flight_price:.2f} (round-trip)
+- **Price**: ${flight_price:.2f} {flight_price_label}
 - **Departure**: {flight.get('departure_time', 'N/A')}
 - **Arrival**: {flight.get('arrival_time', 'N/A')}
 - **Stops**: {outbound_stops} {outbound_stops_text}
 """
 
-        if return_flight:
-            return_stops = return_flight.get("stops", 0)
-            return_stops_text = "(Non-stop)" if return_stops == 0 else f"({return_stops} stop{'s' if return_stops > 1 else ''})"
-            response += f"""
+        # Only show return flight section for round-trip
+        if not is_one_way:
+            if return_flight:
+                return_stops = return_flight.get("stops", 0)
+                return_stops_text = "(Non-stop)" if return_stops == 0 else f"({return_stops} stop{'s' if return_stops > 1 else ''})"
+                response += f"""
 🔙 **Return Flight** ({params.destination} → {params.origin})
 - **Airline**: {return_flight.get('airline', flight.get('airline', 'Unknown'))}
 - **Departure**: {return_flight.get('departure_time', 'N/A')}
 - **Arrival**: {return_flight.get('arrival_time', 'N/A')}
 - **Stops**: {return_stops} {return_stops_text}
 """
-        else:
-            response += f"""
+            else:
+                response += f"""
 🔙 **Return Flight** ({params.destination} → {params.origin})
 - Return flight included in round-trip price
 - Specific return times will be shown when booking
@@ -697,7 +1129,20 @@ IMPORTANT RULES:
                 
                 response += f"- **{name}**{type_str} {rating_str} {reviews_str}\n"
 
-        response += f"""
+        # Format trip summary based on trip type
+        if is_one_way:
+            response += f"""
+---
+
+📋 **Trip Summary**
+- **Route**: {params.origin} → {params.destination} (one-way)
+- **Date**: {params.start_date}
+- **Arrival**: {plan.get('arrival_time', 'N/A')}
+- **Buffer to Hotel**: {plan.get('gap_hours', TRAVEL_HOTEL_CHECKIN_GAP_HOURS)} hours
+
+Would you like me to search for a return flight or different dates?"""
+        else:
+            response += f"""
 ---
 
 📋 **Trip Summary**

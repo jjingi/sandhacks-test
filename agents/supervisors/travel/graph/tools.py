@@ -139,25 +139,36 @@ async def _search_flights_internal(
     origin: str,
     destination: str,
     outbound_date: str,
-    return_date: str,
+    return_date: str = None,
+    is_one_way: bool = False,
 ) -> str:
     """
     Internal function to search for flights using the Flight Search Agent via A2A.
     This function can be called directly (not wrapped as a LangChain tool).
     
+    Supports both round-trip and one-way flights:
+    - Round-trip: origin, destination, outbound_date, return_date
+    - One-way: origin, destination, outbound_date (no return_date, is_one_way=True)
+    
     Args:
         origin: Departure airport code (e.g., "LAX")
         destination: Arrival airport code (e.g., "NRT")
         outbound_date: Departure date (YYYY-MM-DD)
-        return_date: Return date (YYYY-MM-DD)
+        return_date: Return date (YYYY-MM-DD) - optional for one-way
+        is_one_way: If True, search for one-way flights only
         
     Returns:
         JSON string with flight results
     """
-    logger.info(f"Sending A2A request to Flight Agent: {origin} -> {destination}")
+    trip_type = "one-way" if is_one_way else "round-trip"
+    logger.info(f"Sending A2A request to Flight Agent ({trip_type}): {origin} -> {destination}")
     
     # Format message for the flight agent
-    message = f"origin:{origin} destination:{destination} outbound:{outbound_date} return:{return_date}"
+    # For one-way flights, include type:oneway flag and omit return date
+    if is_one_way:
+        message = f"origin:{origin} destination:{destination} outbound:{outbound_date} type:oneway"
+    else:
+        message = f"origin:{origin} destination:{destination} outbound:{outbound_date} return:{return_date}"
     
     try:
         result = await _send_a2a_message(FLIGHT_AGENT_CARD, message)
@@ -261,12 +272,22 @@ async def search_hotels_a2a(
         return json.dumps({"status": "error", "message": str(e)})
 
 
-async def get_flights_via_a2a(origin: str, destination: str, outbound_date: str, return_date: str) -> list:
+async def get_flights_via_a2a(
+    origin: str,
+    destination: str,
+    outbound_date: str,
+    return_date: str = None,
+    is_one_way: bool = False,
+) -> list:
     """
     Get flights via A2A and parse the response.
     
     This is the main function called by the Travel Supervisor graph
     to search for flights through the Flight Agent.
+    
+    Supports both round-trip and one-way flights:
+    - Round-trip: provide outbound_date and return_date
+    - One-way: provide outbound_date only, set is_one_way=True
     
     Note: Uses _search_flights_internal (not the @tool decorated version)
     to avoid the 'StructuredTool object is not callable' error.
@@ -275,7 +296,9 @@ async def get_flights_via_a2a(origin: str, destination: str, outbound_date: str,
         List of flight dictionaries
     """
     # Use the internal function (not the @tool decorated version)
-    result_json = await _search_flights_internal(origin, destination, outbound_date, return_date)
+    result_json = await _search_flights_internal(
+        origin, destination, outbound_date, return_date, is_one_way
+    )
     
     try:
         result = json.loads(result_json)

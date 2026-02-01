@@ -50,8 +50,9 @@ class FlightSearchAgent:
         """
         Process flight search request and return results.
         
-        Expected message format:
-        "Search flights from {origin} to {destination} on {outbound_date} returning {return_date}"
+        Supports both round-trip and one-way flights:
+        - Round-trip: "origin:LAX destination:NRT outbound:2026-01-15 return:2026-01-22"
+        - One-way: "origin:LAX destination:NRT outbound:2026-01-15 type:oneway"
         """
         # Get the latest human message
         user_msg = next(
@@ -65,22 +66,41 @@ class FlightSearchAgent:
         logger.info(f"Flight agent received request: {user_msg.content}")
         
         try:
-            # Parse the request - expecting format like:
-            # "origin:LAX destination:NRT outbound:2026-01-15 return:2026-01-22"
+            # Parse the request
             params = self._parse_request(user_msg.content)
+            is_one_way = params.get("is_one_way", False)
             
-            if not all([params.get("origin"), params.get("destination"), 
-                       params.get("outbound_date"), params.get("return_date")]):
+            # Check required parameters
+            # For one-way: origin, destination, outbound_date
+            # For round-trip: also need return_date
+            required_present = all([
+                params.get("origin"), 
+                params.get("destination"), 
+                params.get("outbound_date")
+            ])
+            
+            if not required_present:
                 return {"messages": [AIMessage(
-                    content="Missing required parameters. Please provide: origin, destination, outbound_date, return_date"
+                    content="Missing required parameters. Please provide: origin, destination, outbound_date"
                 )]}
             
+            # For round-trip, also need return_date
+            if not is_one_way and not params.get("return_date"):
+                return {"messages": [AIMessage(
+                    content="Missing return_date for round-trip. Add 'type:oneway' for one-way flights."
+                )]}
+            
+            trip_type = "one-way" if is_one_way else "round-trip"
+            logger.info(f"Searching {trip_type} flights: {params['origin']} -> {params['destination']}")
+            
             # Search for flights using SerpAPI
+            # For one-way, pass outbound_date as return_date too (the API handles type:2)
             flights = await search_flights(
                 origin=params["origin"],
                 destination=params["destination"],
                 outbound_date=params["outbound_date"],
-                return_date=params["return_date"],
+                return_date=params.get("return_date") or params["outbound_date"],
+                include_return_flights=not is_one_way,  # Don't fetch return flights for one-way
             )
             
             if not flights:
@@ -101,10 +121,13 @@ class FlightSearchAgent:
         Parse flight search request from message.
         
         Supports formats:
-        - "origin:LAX destination:NRT outbound:2026-01-15 return:2026-01-22"
+        - Round-trip: "origin:LAX destination:NRT outbound:2026-01-15 return:2026-01-22"
+        - One-way: "origin:LAX destination:NRT outbound:2026-01-15 type:oneway"
         - JSON-like format
         """
-        params = {}
+        params = {
+            "is_one_way": False  # Default to round-trip
+        }
         
         # Try parsing key:value format
         parts = message.split()
@@ -122,6 +145,8 @@ class FlightSearchAgent:
                     params["outbound_date"] = value
                 elif key in ["return", "return_date", "end"]:
                     params["return_date"] = value
+                elif key == "type" and value.lower() in ["oneway", "one-way", "single"]:
+                    params["is_one_way"] = True
         
         return params
     
