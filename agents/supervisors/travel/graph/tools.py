@@ -28,6 +28,7 @@ from agntcy_app_sdk.semantic.a2a.protocol import A2AProtocol
 
 from agents.flight.card import AGENT_CARD as FLIGHT_AGENT_CARD
 from agents.hotel.card import AGENT_CARD as HOTEL_AGENT_CARD
+from agents.activity.card import AGENT_CARD as ACTIVITY_AGENT_CARD
 from agents.supervisors.travel.graph.shared import get_factory
 from config.config import (
     DEFAULT_MESSAGE_TRANSPORT,
@@ -138,25 +139,36 @@ async def _search_flights_internal(
     origin: str,
     destination: str,
     outbound_date: str,
-    return_date: str,
+    return_date: str = None,
+    is_one_way: bool = False,
 ) -> str:
     """
     Internal function to search for flights using the Flight Search Agent via A2A.
     This function can be called directly (not wrapped as a LangChain tool).
     
+    Supports both round-trip and one-way flights:
+    - Round-trip: origin, destination, outbound_date, return_date
+    - One-way: origin, destination, outbound_date (no return_date, is_one_way=True)
+    
     Args:
         origin: Departure airport code (e.g., "LAX")
         destination: Arrival airport code (e.g., "NRT")
         outbound_date: Departure date (YYYY-MM-DD)
-        return_date: Return date (YYYY-MM-DD)
+        return_date: Return date (YYYY-MM-DD) - optional for one-way
+        is_one_way: If True, search for one-way flights only
         
     Returns:
         JSON string with flight results
     """
-    logger.info(f"Sending A2A request to Flight Agent: {origin} -> {destination}")
+    trip_type = "one-way" if is_one_way else "round-trip"
+    logger.info(f"Sending A2A request to Flight Agent ({trip_type}): {origin} -> {destination}")
     
     # Format message for the flight agent
-    message = f"origin:{origin} destination:{destination} outbound:{outbound_date} return:{return_date}"
+    # For one-way flights, include type:oneway flag and omit return date
+    if is_one_way:
+        message = f"origin:{origin} destination:{destination} outbound:{outbound_date} type:oneway"
+    else:
+        message = f"origin:{origin} destination:{destination} outbound:{outbound_date} return:{return_date}"
     
     try:
         result = await _send_a2a_message(FLIGHT_AGENT_CARD, message)
@@ -260,12 +272,22 @@ async def search_hotels_a2a(
         return json.dumps({"status": "error", "message": str(e)})
 
 
-async def get_flights_via_a2a(origin: str, destination: str, outbound_date: str, return_date: str) -> list:
+async def get_flights_via_a2a(
+    origin: str,
+    destination: str,
+    outbound_date: str,
+    return_date: str = None,
+    is_one_way: bool = False,
+) -> list:
     """
     Get flights via A2A and parse the response.
     
     This is the main function called by the Travel Supervisor graph
     to search for flights through the Flight Agent.
+    
+    Supports both round-trip and one-way flights:
+    - Round-trip: provide outbound_date and return_date
+    - One-way: provide outbound_date only, set is_one_way=True
     
     Note: Uses _search_flights_internal (not the @tool decorated version)
     to avoid the 'StructuredTool object is not callable' error.
@@ -274,7 +296,9 @@ async def get_flights_via_a2a(origin: str, destination: str, outbound_date: str,
         List of flight dictionaries
     """
     # Use the internal function (not the @tool decorated version)
-    result_json = await _search_flights_internal(origin, destination, outbound_date, return_date)
+    result_json = await _search_flights_internal(
+        origin, destination, outbound_date, return_date, is_one_way
+    )
     
     try:
         result = json.loads(result_json)
@@ -313,6 +337,65 @@ async def get_hotels_via_a2a(location: str, check_in_date: str, check_out_date: 
             return []
     except json.JSONDecodeError:
         logger.error(f"Failed to parse hotel results: {result_json}")
+        return []
+
+
+# =============================================================================
+# Activity Search Functions (A2A communication with Activity Agent)
+# =============================================================================
+
+async def _search_activities_internal(location: str, activity_type: str = "things to do") -> str:
+    """
+    Search for activities using the Activity Search Agent via A2A.
+    
+    Args:
+        location: City or area name (e.g., "San Jose, CA", "Tokyo")
+        activity_type: Type of activities to search for (default: "things to do")
+        
+    Returns:
+        JSON string with activity results
+    """
+    logger.info(f"Sending A2A request to Activity Agent: {location}")
+    
+    # Format message for the activity agent
+    # Replace spaces with underscores in location to handle parsing
+    location_formatted = location.replace(" ", "_")
+    message = f"location:{location_formatted} type:{activity_type.replace(' ', '_')}"
+    
+    try:
+        result = await _send_a2a_message(ACTIVITY_AGENT_CARD, message)
+        return result
+    except A2AAgentError as e:
+        logger.error(f"Activity search A2A error: {e}")
+        return json.dumps({"status": "error", "message": str(e)})
+
+
+async def get_activities_via_a2a(location: str, activity_type: str = "things to do") -> list:
+    """
+    Get activities via A2A and parse the response.
+    
+    This is the main function called by the Travel Supervisor graph
+    to search for activities through the Activity Agent.
+    
+    Args:
+        location: City name (e.g., "San Jose, CA", "Tokyo, Japan")
+        activity_type: Type of activities (default: "things to do")
+    
+    Returns:
+        List of activity dictionaries with name, rating, address, etc.
+    """
+    # Use the internal function (not the @tool decorated version)
+    result_json = await _search_activities_internal(location, activity_type)
+    
+    try:
+        result = json.loads(result_json)
+        if result.get("status") == "success":
+            return result.get("activities", [])
+        else:
+            logger.error(f"Activity search failed: {result.get('message')}")
+            return []
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse activity results: {result_json}")
         return []
 
 

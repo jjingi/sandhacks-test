@@ -20,19 +20,35 @@ class TravelSearchArgs(BaseModel):
     Used with LLM structured output to parse natural language
     trip requests into structured parameters.
     
+    Supports multiple search types:
+    - full_trip: Flight + Hotel + Activities (default)
+    - flight_only: Just flights (one-way or round-trip)
+    - hotel_only: Just hotels at a location
+    - activity_only: Just activities/things to do at a location
+    
     Attributes:
-        origin: Departure airport code (e.g., "LAX", "JFK") - used for flight searches
-        destination: Arrival airport code (e.g., "NRT", "CDG") - used for flight searches
-        origin_city: Original departure city name (e.g., "New York") - used for display
-        destination_city: Original arrival city name (e.g., "Tokyo", "Paris") - used for hotel searches
+        search_type: Type of search - "full_trip", "flight_only", "hotel_only", "activity_only"
+        origin: Departure airport code (e.g., "LAX", "JFK") - for flights
+        destination: Arrival airport code (e.g., "NRT", "CDG") - for flights
+        origin_city: Original departure city name - for display
+        destination_city: Original arrival city name - for hotels/activities
+        location: General location for hotel-only or activity-only searches
         start_date: Trip start date in YYYY-MM-DD format
-        end_date: Trip end date in YYYY-MM-DD format
+        end_date: Trip end/return date in YYYY-MM-DD format
+        is_one_way: True if user wants one-way flight only
         has_all_params: Whether all required parameters were extracted
         missing_params: Description of any missing parameters
     
-    Example user input: "Find me flights from LAX to Tokyo, Jan 15-22, 2026"
-    Extracted: origin="LAX", destination="NRT", destination_city="Tokyo", ...
+    Examples:
+        Full trip: "Find trip from LAX to Tokyo, Jan 15-22"
+        Flight only: "Find flights from Seattle to San Diego on Feb 20"
+        Hotel only: "Find hotels in Paris for March 1-5"
+        Activity only: "What things to do in San Francisco?"
     """
+    search_type: str = Field(
+        default="full_trip",
+        description="Type of search: 'full_trip' (flight+hotel+activities), 'flight_only', 'hotel_only', 'activity_only'"
+    )
     origin: Optional[str] = Field(
         default=None,
         description="Departure airport code (e.g., 'LAX', 'JFK') - converted from city name"
@@ -49,17 +65,25 @@ class TravelSearchArgs(BaseModel):
         default=None,
         description="Original arrival city name before airport code conversion (e.g., 'Tokyo', 'Paris') - used for hotel searches"
     )
+    location: Optional[str] = Field(
+        default=None,
+        description="General location for hotel-only or activity-only searches (e.g., 'Paris', 'San Francisco')"
+    )
     start_date: Optional[str] = Field(
         default=None,
         description="Trip start/departure date in YYYY-MM-DD format"
     )
     end_date: Optional[str] = Field(
         default=None,
-        description="Trip end/return date in YYYY-MM-DD format"
+        description="Trip end/return date in YYYY-MM-DD format (optional for one-way trips)"
+    )
+    is_one_way: bool = Field(
+        default=False,
+        description="True if user wants one-way flight only (no return date needed)"
     )
     has_all_params: bool = Field(
         default=False,
-        description="True if all required parameters (origin, destination, start_date, end_date) were extracted"
+        description="True if all required parameters were extracted based on search_type"
     )
     missing_params: str = Field(
         default="",

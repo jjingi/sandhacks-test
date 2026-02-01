@@ -5,11 +5,13 @@
 # Architecture:
 #   User → Travel Supervisor → A2A/NATS → Flight Agent → SerpAPI
 #                            → A2A/NATS → Hotel Agent → SerpAPI
+#                            → A2A/NATS → Activity Agent → SerpAPI
 #
 # Services:
 # - travel-supervisor: Main supervisor agent (port 8000)
 # - flight-agent: A2A agent for flight search (port 9001)
 # - hotel-agent: A2A agent for hotel search (port 9002)
+# - activity-agent: A2A agent for activity/attraction search (port 9003)
 # - nats: Message transport for A2A communication
 # - ui: Frontend web interface (port 3000)
 #
@@ -70,9 +72,34 @@ services:
       - nats
 
   # =============================================================================
+  # Activity Search Agent (A2A Server)
+  # =============================================================================
+  # A2A agent that searches for activities and attractions using SerpAPI
+  activity-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.activity-agent
+    image: activity-agent:latest
+    container_name: activity-agent
+    env_file:
+      - .env
+    environment:
+      - DEFAULT_MESSAGE_TRANSPORT=${DEFAULT_MESSAGE_TRANSPORT:-NATS}
+      - TRANSPORT_SERVER_ENDPOINT=${TRANSPORT_SERVER_ENDPOINT:-nats://nats:4222}
+      - OTLP_HTTP_ENDPOINT=${OTLP_HTTP_ENDPOINT:-http://otel-collector:4318}
+      - SERPAPI_API_KEY=${SERPAPI_API_KEY}
+      - ACTIVITY_AGENT_HOST=0.0.0.0
+      - ACTIVITY_AGENT_PORT=9003
+      - ENABLE_HTTP=true
+    ports:
+      - "9003:9003"
+    depends_on:
+      - nats
+
+  # =============================================================================
   # Travel Supervisor Agent (A2A Client)
   # =============================================================================
-  # Main travel planning agent that coordinates Flight and Hotel agents via A2A
+  # Main travel planning agent that coordinates Flight, Hotel, and Activity agents via A2A
   travel-supervisor:
     build:
       context: .
@@ -99,6 +126,7 @@ services:
       - nats
       - flight-agent
       - hotel-agent
+      - activity-agent
 
   # =============================================================================
   # Message Transport

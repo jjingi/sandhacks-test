@@ -26,54 +26,65 @@ async def search_flights(
     origin: str,
     destination: str,
     outbound_date: str,
-    return_date: str,
+    return_date: str = None,
     include_return_flights: bool = True,
 ) -> list[dict]:
     """
     Search for flights using SerpAPI's Google Flights engine.
     
-    This function queries SerpAPI for round-trip flights sorted by price (lowest first).
-    It extracts the arrival time of the last leg of the outbound flight, which is used
-    for hotel check-in timing constraints.
+    Supports both round-trip and one-way flights:
+    - Round-trip: queries with type=1, optionally fetches return flight details
+    - One-way: queries with type=2, no return date needed
     
-    Optionally fetches return flight options separately to provide complete trip info.
+    This function extracts the arrival time of the last leg of the outbound flight,
+    which is used for hotel check-in timing constraints.
     
     Args:
         origin: Departure airport code (e.g., "LAX", "JFK") or city name
         destination: Arrival airport code or city name
         outbound_date: Departure date in YYYY-MM-DD format
-        return_date: Return date in YYYY-MM-DD format
-        include_return_flights: If True, fetch return flight options (default: True)
+        return_date: Return date in YYYY-MM-DD format (optional for one-way)
+        include_return_flights: If True, fetch return flight options for round-trip (default: True)
+                               Set to False for one-way flights.
     
     Returns:
         List of flight dictionaries containing:
-        - price: Total price in USD (round-trip)
+        - price: Total price in USD (round-trip or one-way)
         - departure_time: Outbound flight departure time
         - arrival_time: Outbound flight arrival time (last leg)
         - airline: Primary airline name
         - duration_minutes: Total flight duration
         - stops: Number of stops
         - flights: Full flight legs data from API
-        - return_flight: Best matching return flight info (if include_return_flights=True)
+        - return_flight: Best matching return flight info (if include_return_flights=True and round-trip)
     
     Raises:
         Exception: If SerpAPI call fails or returns an error
     
-    Example:
+    Example (round-trip):
         >>> flights = await search_flights("LAX", "NRT", "2026-01-15", "2026-01-22")
-        >>> print(flights[0]["price"])  # Cheapest flight price
-        >>> print(flights[0]["return_flight"])  # Return flight details
+        >>> print(flights[0]["price"])  # Cheapest round-trip price
+    
+    Example (one-way):
+        >>> flights = await search_flights("SEA", "SAN", "2026-02-20", include_return_flights=False)
+        >>> print(flights[0]["price"])  # Cheapest one-way price
     """
-    logger.info(f"Searching flights: {origin} -> {destination}, {outbound_date} to {return_date}")
+    # Determine if this is a one-way search
+    is_one_way = not include_return_flights or not return_date
+    trip_type = "one-way" if is_one_way else "round-trip"
+    
+    logger.info(f"Searching {trip_type} flights: {origin} -> {destination}, {outbound_date}" + 
+                (f" to {return_date}" if return_date and not is_one_way else ""))
     
     # Validate API key is configured
     if not SERPAPI_API_KEY:
         logger.error("SERPAPI_API_KEY is not configured")
         raise ValueError("SerpAPI key is not configured. Please set SERPAPI_API_KEY in your environment.")
     
-    # Build SerpAPI request parameters for OUTBOUND flights
+    # Build SerpAPI request parameters
     # engine=google_flights: Use Google Flights data source
     # type=1: Round trip flight search
+    # type=2: One way flight search
     # sort_by=2: Sort results by price (lowest first)
     params = {
         "engine": "google_flights",
@@ -81,11 +92,14 @@ async def search_flights(
         "departure_id": origin.upper(),  # Airport codes should be uppercase
         "arrival_id": destination.upper(),
         "outbound_date": outbound_date,
-        "return_date": return_date,
-        "type": "1",  # 1 = Round trip, 2 = One way
+        "type": "2" if is_one_way else "1",  # 1 = Round trip, 2 = One way
         "sort_by": "2",  # Sort by price
         "currency": "USD",
     }
+    
+    # Only include return_date for round-trip searches
+    if not is_one_way and return_date:
+        params["return_date"] = return_date
     
     try:
         # Make async HTTP request to SerpAPI for outbound flights
@@ -113,9 +127,10 @@ async def search_flights(
         
         logger.info(f"Found {len(all_flights)} outbound flights")
         
-        # Fetch return flight options if requested
+        # Fetch return flight options if requested (only for round-trip flights)
         # This makes a separate search for the return leg to get actual return times
-        if include_return_flights and all_flights:
+        # Skip for one-way flights (is_one_way=True or no return_date)
+        if include_return_flights and all_flights and return_date and not is_one_way:
             return_flights = await _search_return_flights(
                 destination, origin, return_date
             )
@@ -521,4 +536,154 @@ def _parse_hotel(property_data: dict, check_in_date: str) -> Optional[dict]:
         }
     except Exception as e:
         logger.warning(f"Failed to parse hotel: {e}")
+        return None
+
+
+async def search_activities(
+    location: str,
+    activity_type: str = "things to do",
+) -> list[dict]:
+    """
+    Search for activities and attractions using SerpAPI's Google Local engine.
+    
+    This function queries SerpAPI for local activities, attractions, and things
+    to do at a destination. Results include ratings, reviews, and descriptions.
+    
+    Args:
+        location: City name or specific location (e.g., "San Jose, CA", "Tokyo")
+        activity_type: Type of activities to search for (default: "things to do")
+                      Options: "things to do", "attractions", "tours", "museums",
+                               "restaurants", "parks", "entertainment"
+    
+    Returns:
+        List of activity dictionaries containing:
+        - name: Activity/place name
+        - address: Location address
+        - rating: User rating (if available)
+        - reviews: Number of reviews
+        - type: Type of place/activity
+        - description: Brief description (if available)
+        - hours: Operating hours (if available)
+        - phone: Contact phone (if available)
+        - website: Website URL (if available)
+        - thumbnail: Image URL (if available)
+    
+    Raises:
+        Exception: If SerpAPI call fails or returns an error
+    
+    Example:
+        >>> activities = await search_activities("San Jose, CA", "attractions")
+        >>> print(activities[0]["name"], activities[0]["rating"])
+    """
+    logger.info(f"Searching activities in {location}, type: {activity_type}")
+    
+    # Validate API key is configured
+    if not SERPAPI_API_KEY:
+        logger.error("SERPAPI_API_KEY is not configured")
+        raise ValueError("SerpAPI key is not configured. Please set SERPAPI_API_KEY in your environment.")
+    
+    # Build SerpAPI request parameters
+    # engine=google_local: Use Google Local/Maps data source for activities
+    params = {
+        "engine": "google_local",
+        "api_key": SERPAPI_API_KEY,
+        "q": f"{activity_type} in {location}",
+    }
+    
+    try:
+        # Make async HTTP request to SerpAPI
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(SERPAPI_BASE_URL, params=params)
+            response.raise_for_status()
+            data = response.json()
+        
+        # Check for API errors in response
+        if "error" in data:
+            logger.error(f"SerpAPI error: {data['error']}")
+            raise Exception(f"SerpAPI error: {data['error']}")
+        
+        # Parse local results from response
+        activities = []
+        local_results = data.get("local_results", [])
+        
+        for place in local_results:
+            activity_info = _parse_activity(place)
+            if activity_info:
+                activities.append(activity_info)
+        
+        logger.info(f"Found {len(activities)} activities")
+        return activities
+        
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error searching activities: {e}")
+        raise Exception(f"Failed to search activities: {e}")
+
+
+def _parse_activity(place_data: dict) -> Optional[dict]:
+    """
+    Parse an activity/place from SerpAPI response into a normalized format.
+    
+    Args:
+        place_data: Raw place data from SerpAPI Google Local response
+    
+    Returns:
+        Normalized activity dictionary or None if parsing fails
+    """
+    try:
+        name = place_data.get("title", "Unknown Place")
+        
+        # Extract address
+        address = place_data.get("address", "")
+        
+        # Extract rating (1-5 scale)
+        rating = place_data.get("rating", 0)
+        if rating is None:
+            rating = 0
+        
+        # Extract reviews count
+        reviews = place_data.get("reviews", 0)
+        if reviews is None:
+            reviews = 0
+        
+        # Extract place type/category
+        place_type = place_data.get("type", "")
+        
+        # Extract description/snippet
+        description = place_data.get("description", "") or place_data.get("snippet", "")
+        
+        # Extract operating hours
+        hours = place_data.get("hours", "")
+        
+        # Extract contact info
+        phone = place_data.get("phone", "")
+        website = place_data.get("website", "")
+        
+        # Extract thumbnail image
+        thumbnail = place_data.get("thumbnail", "")
+        
+        # Extract price level (e.g., "$", "$$", "$$$")
+        price_level = place_data.get("price", "")
+        
+        # Extract GPS coordinates if available
+        gps = place_data.get("gps_coordinates", {})
+        latitude = gps.get("latitude")
+        longitude = gps.get("longitude")
+        
+        return {
+            "name": name,
+            "address": address,
+            "rating": rating,
+            "reviews": reviews,
+            "type": place_type,
+            "description": description,
+            "hours": hours,
+            "phone": phone,
+            "website": website,
+            "thumbnail": thumbnail,
+            "price_level": price_level,
+            "latitude": latitude,
+            "longitude": longitude,
+        }
+    except Exception as e:
+        logger.warning(f"Failed to parse activity: {e}")
         return None
