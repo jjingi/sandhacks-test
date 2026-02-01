@@ -19,9 +19,11 @@ COPY frontend/package.json frontend/package-lock.json ./
 COPY frontend/ .
 
 # Install dependencies and build
-RUN ["npm", "install", "--verbose"]
-RUN ["npm", "run", "build", "--verbose"]
-RUN ["npm", "cache", "clean", "--force"]
+# Use shell form to avoid permission issues with node_modules binaries
+RUN npm install --verbose && \
+    chmod +x node_modules/.bin/* && \
+    npm run build --verbose && \
+    npm cache clean --force
 
 # Expose port 3000
 EXPOSE 3000

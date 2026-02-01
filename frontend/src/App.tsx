@@ -288,7 +288,11 @@ const App: React.FC = () => {
   }
 
   // Determine if we should show the graph
+  // Show graph when: no messages (new chat), or when loading (animation)
   const showGraph = conversationMessages.length === 0 || isAgentLoading
+  
+  // Show welcome section only when it's a fresh new chat (no messages)
+  const showWelcome = conversationMessages.length === 0
 
   return (
     <ThemeProvider>
@@ -307,9 +311,53 @@ const App: React.FC = () => {
           <div className="flex flex-1 flex-col border-l border-gray-800 bg-[#212121]">
             {/* Main content area - scrollable */}
             <div className="relative flex-1 overflow-y-auto">
-              {/* Agent Graph - shown when no messages or during loading */}
-              {showGraph && (
-                <div className={`${conversationMessages.length > 0 ? 'h-[350px]' : 'h-full'}`}>
+              {/* New Chat Welcome View - Graph + Welcome Section */}
+              {showWelcome && (
+                <div className="flex h-full flex-col">
+                  {/* Agent Graph - takes up available space above welcome */}
+                  <div className="flex-1 min-h-[300px]">
+                    <MainArea
+                      pattern={selectedPattern}
+                      buttonClicked={buttonClicked}
+                      setButtonClicked={setButtonClicked}
+                      aiReplied={aiReplied}
+                      setAiReplied={setAiReplied}
+                      chatHeight={chatHeightValue}
+                      isExpanded={isExpanded}
+                      groupCommResponseReceived={false}
+                      onNodeHighlight={() => {}}
+                    />
+                  </div>
+                  
+                  {/* Welcome Section */}
+                  <div className="flex flex-col items-center justify-center px-4 pb-4">
+                    {/* Airplane Icon - tilted for dynamic look */}
+                    <div className="mb-4">
+                      <svg 
+                        className="h-12 w-12 text-[#3ce98a] -rotate-45" 
+                        viewBox="0 0 24 24" 
+                        fill="none" 
+                        stroke="currentColor" 
+                        strokeWidth="2"
+                      >
+                        <path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z" />
+                      </svg>
+                    </div>
+                    
+                    {/* Welcome Text */}
+                    <h1 className="mb-2 text-2xl font-semibold text-white">
+                      How can I help you plan your trip?
+                    </h1>
+                    <p className="text-gray-400">
+                      Find flights, hotels, and activities for your next adventure
+                    </p>
+                  </div>
+                </div>
+              )}
+              
+              {/* Loading State with Graph - when messages exist but loading */}
+              {!showWelcome && isAgentLoading && (
+                <div className="h-[350px]">
                   <MainArea
                     pattern={selectedPattern}
                     buttonClicked={buttonClicked}
@@ -385,7 +433,7 @@ const App: React.FC = () => {
                 setButtonClicked={setButtonClicked}
                 setAiReplied={setAiReplied}
                 isBottomLayout={true}
-                showCoffeePrompts={true}
+                showCoffeePrompts={false}
                 showLogisticsPrompts={false}
                 showProgressTracker={false}
                 showAuctionStreaming={false}

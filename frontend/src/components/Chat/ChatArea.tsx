@@ -209,32 +209,42 @@ const ChatArea: React.FC<ChatAreaProps> = ({
                     </div>
                 )}
 
-                <div className="flex w-full max-w-[680px] flex-col items-stretch gap-0 p-0">
-                    <div className="relative box-border flex min-h-[52px] flex-1 flex-row items-center rounded-3xl border border-gray-700 bg-[#2f2f2f] px-4 py-2 transition-all focus-within:border-gray-600">
-                        <div className="flex h-full w-full flex-row items-center gap-3">
-                            <input
-                                className="h-6 min-w-0 flex-1 border-none bg-transparent font-inter text-[15px] font-normal leading-5 text-gray-100 outline-none placeholder:text-gray-500"
-                                placeholder="Ask anything"
-                                value={content}
-                                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                                    setContent(e.target.value)
+                {/* Clean pill-shaped input box */}
+                <div className="flex w-full max-w-[680px] flex-col items-stretch">
+                    <div className="relative flex h-[52px] items-center rounded-full border border-gray-700/50 bg-[#303030] px-5 transition-all focus-within:border-gray-600">
+                        <input
+                            className="h-full min-w-0 flex-1 border-none bg-transparent text-[15px] font-normal text-gray-100 outline-none placeholder:text-gray-500"
+                            placeholder="Ask anything"
+                            value={content}
+                            onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                                setContent(e.target.value)
+                            }
+                            onKeyPress={handleKeyPress}
+                            disabled={loading || isAgentLoading}
+                        />
+                        {/* Tilted send arrow icon */}
+                        <button
+                            onClick={() => {
+                                if (content.trim() && !loading && !isAgentLoading) {
+                                    processMessage()
                                 }
-                                onKeyPress={handleKeyPress}
-                                disabled={loading || isAgentLoading}
-                            />
-                            <button
-                                onClick={() => {
-                                    if (content.trim() && !loading && !isAgentLoading) {
-                                        processMessage()
-                                    }
-                                }}
-                                disabled={!content.trim() || loading || isAgentLoading}
-                                className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border-none transition-all disabled:cursor-not-allowed disabled:opacity-30"
-                                style={{background: content.trim() ? 'linear-gradient(135deg, #3ce98a, #5feb9b)' : '#424242'}}
+                            }}
+                            disabled={!content.trim() || loading || isAgentLoading}
+                            className="flex cursor-pointer items-center justify-center border-none bg-transparent p-2 transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            <svg 
+                                className={`h-5 w-5 -rotate-45 ${content.trim() ? 'text-gray-300' : 'text-gray-500'}`}
+                                viewBox="0 0 24 24" 
+                                fill="none" 
+                                stroke="currentColor" 
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
                             >
-                                <Send className="h-4 w-4 text-white" />
-                            </button>
-                        </div>
+                                <path d="M22 2L11 13" />
+                                <path d="M22 2L15 22L11 13L2 9L22 2Z" />
+                            </svg>
+                        </button>
                     </div>
                 </div>
             </div>
