@@ -5,28 +5,27 @@
  * Pattern Utilities for Travel Agent
  * 
  * This module provides pattern-based configuration for the Travel Planning Agent.
- * The travel agent uses a simplified architecture compared to the original coffee
- * farm demo - it only needs a supervisor that calls external APIs (SerpAPI).
+ * The travel agent uses HTTP communication between the supervisor and agents.
  **/
 
 export const PATTERNS = {
-  // Travel agent pattern - searches for flights and hotels
+  // Travel agent patterns
   TRAVEL_SEARCH: "travel_search",
-  // Streaming travel search with real-time updates
   TRAVEL_SEARCH_STREAMING: "travel_search_streaming",
-  // Legacy patterns (kept for backward compatibility, but not used)
-  PUBLISH_SUBSCRIBE: "publish_subscribe",
-  PUBLISH_SUBSCRIBE_STREAMING: "publish_subscribe_streaming",
-  GROUP_COMMUNICATION: "group_communication",
+  
+  // Legacy patterns (mapped to travel search for compatibility)
+  GROUP_COMMUNICATION: "travel_search",
+  PUBLISH_SUBSCRIBE: "travel_search",
+  PUBLISH_SUBSCRIBE_STREAMING: "travel_search_streaming",
 } as const
 
 export type PatternType = (typeof PATTERNS)[keyof typeof PATTERNS]
 
 /**
- * Check if the pattern requires group communication (not used for travel agent)
+ * Check if the pattern requires group communication
+ * Travel agent doesn't use complex group communication
  */
 export const isGroupCommunication = (pattern?: string): boolean => {
-  // Travel agent doesn't use group communication
   return false
 }
 
@@ -34,7 +33,7 @@ export const isGroupCommunication = (pattern?: string): boolean => {
  * Determine if retries should be enabled for a pattern
  */
 export const shouldEnableRetries = (pattern?: string): boolean => {
-  return isGroupCommunication(pattern)
+  return false
 }
 
 /**
@@ -46,8 +45,7 @@ export const getApiUrlForPattern = (pattern?: string): string => {
   const TRAVEL_APP_API_URL =
     import.meta.env.VITE_EXCHANGE_APP_API_URL || DEFAULT_TRAVEL_API_URL
 
-  // All patterns use the travel supervisor API URL (port 8000)
-  // This includes legacy patterns that are mapped to travel functionality
+  // All travel patterns use the same API URL
   return TRAVEL_APP_API_URL
 }
 
@@ -62,7 +60,6 @@ export const supportsSSE = (pattern?: string): boolean => {
  * Get the streaming endpoint URL for a pattern
  */
 export const getStreamingEndpointForPattern = (pattern?: string): string => {
-  // All streaming patterns use the same travel supervisor endpoint
   return `${getApiUrlForPattern(pattern)}/agent/prompt/stream`
 }
 
@@ -70,21 +67,14 @@ export const getStreamingEndpointForPattern = (pattern?: string): string => {
  * Check if a pattern uses streaming responses
  */
 export const isStreamingPattern = (pattern?: string): boolean => {
-  return (
-    pattern === PATTERNS.TRAVEL_SEARCH_STREAMING ||
-    pattern === PATTERNS.PUBLISH_SUBSCRIBE_STREAMING ||
-    pattern === PATTERNS.GROUP_COMMUNICATION
-  )
+  return pattern === PATTERNS.TRAVEL_SEARCH_STREAMING
 }
 
 /**
- * Check if pattern supports transport updates (NATS/SLIM switching)
+ * Check if pattern supports transport updates (NATS/SLIM display)
  */
 export const supportsTransportUpdates = (pattern?: string): boolean => {
-  return (
-    pattern === PATTERNS.TRAVEL_SEARCH ||
-    pattern === PATTERNS.TRAVEL_SEARCH_STREAMING
-  )
+  return true
 }
 
 /**
@@ -95,12 +85,6 @@ export const getPatternDisplayName = (pattern?: string): string => {
     case PATTERNS.TRAVEL_SEARCH:
       return "Travel Search"
     case PATTERNS.TRAVEL_SEARCH_STREAMING:
-      return "Travel Search: Streaming"
-    case PATTERNS.PUBLISH_SUBSCRIBE:
-      return "Travel Search"
-    case PATTERNS.PUBLISH_SUBSCRIBE_STREAMING:
-      return "Travel Search: Streaming"
-    case PATTERNS.GROUP_COMMUNICATION:
       return "Travel Search: Streaming"
     default:
       return "Travel Agent"

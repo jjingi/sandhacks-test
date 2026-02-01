@@ -7,10 +7,9 @@ import { create } from "zustand"
 import { LogisticsStreamStep } from "@/types/streaming"
 import { isLocalDev, parseFetchError } from "@/utils/const.ts"
 
-// Travel supervisor API URL (port 8000)
-const DEFAULT_TRAVEL_APP_API_URL = "http://127.0.0.1:8000"
-const TRAVEL_APP_API_URL =
-    import.meta.env.VITE_EXCHANGE_APP_API_URL || DEFAULT_TRAVEL_APP_API_URL
+const DEFAULT_LOGISTICS_APP_API_URL = "http://127.0.0.1:9090"
+const LOGISTICS_APP_API_URL =
+    import.meta.env.VITE_LOGISTICS_APP_API_URL || DEFAULT_LOGISTICS_APP_API_URL
 
 const isValidLogisticsStreamStep = (data: any): data is LogisticsStreamStep => {
   if (!data || typeof data !== "object") {
@@ -139,7 +138,7 @@ export const useGroupStreamingStore = create<
 
     try {
       const response = await fetch(
-          `${TRAVEL_APP_API_URL}/agent/prompt/stream`,
+          `${LOGISTICS_APP_API_URL}/agent/prompt/stream`,
           {
             method: "POST",
             credentials: isLocalDev ? "omit" : "include",

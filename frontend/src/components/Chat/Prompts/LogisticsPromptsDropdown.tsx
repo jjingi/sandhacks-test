@@ -8,10 +8,9 @@ import LoadingSpinner from "./LoadingSpinner"
 import InfoButton from "./InfoButton"
 import { PromptCategory } from "./PromptTypes"
 
-// Travel supervisor API URL (port 8000)
-const DEFAULT_TRAVEL_APP_API_URL = "http://127.0.0.1:8000"
-const TRAVEL_APP_API_URL =
-    import.meta.env.VITE_EXCHANGE_APP_API_URL || DEFAULT_TRAVEL_APP_API_URL
+const DEFAULT_LOGISTICS_APP_API_URL = "http://127.0.0.1:9090"
+const LOGISTICS_APP_API_URL =
+    import.meta.env.VITE_LOGISTICS_APP_API_URL || DEFAULT_LOGISTICS_APP_API_URL
 
 interface LogisticsPromptsDropdownProps {
   visible: boolean
@@ -36,7 +35,7 @@ const LogisticsPromptsDropdown: React.FC<LogisticsPromptsDropdownProps> = ({
     const fetchPrompts = async (retryCount = 0) => {
       try {
         setIsLoading(true)
-        const res = await fetch(`${TRAVEL_APP_API_URL}/suggested-prompts`, {
+        const res = await fetch(`${LOGISTICS_APP_API_URL}/suggested-prompts`, {
           cache: "no-cache",
           signal: controller.signal,
         })

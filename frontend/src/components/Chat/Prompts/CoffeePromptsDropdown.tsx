@@ -10,6 +10,7 @@
  **/
 
 import React, { useState, useRef, useEffect } from "react"
+import { Plane } from "lucide-react"
 import LoadingSpinner from "./LoadingSpinner"
 import InfoButton from "@/components/Chat/Prompts/InfoButton.tsx"
 import { PromptCategory } from "./PromptTypes"
@@ -132,65 +133,72 @@ const TravelPromptsDropdown: React.FC<TravelPromptsDropdownProps> = ({
 
   if (!visible) return null
 
-  const dropdownClasses = `flex h-9 w-166 cursor-pointer flex-row items-center gap-1 rounded-lg bg-chat-background p-2 transition-colors duration-200 ease-in-out hover:bg-chat-background-hover ${
-      isOpen ? "bg-chat-background-hover" : ""
+  const dropdownClasses = `flex h-9 cursor-pointer flex-row items-center gap-2 rounded-full border border-gray-700 bg-[#2f2f2f] px-4 py-2 transition-all duration-200 ease-in-out hover:bg-[#3a3a3a] ${
+      isOpen ? "bg-[#3a3a3a]" : ""
   }`
 
   const hasNoPrompts = categories.every((category) => category.prompts.length === 0)
 
-  const menuClasses = `absolute bottom-full left-0 z-[1000] mb-1 max-h-[365px] min-h-[50px] w-[320px] overflow-y-auto rounded-[6px] border border-nav-border bg-chat-dropdown-background px-[2px] py-0 opacity-100 shadow-[0px_2px_5px_0px_rgba(0,0,0,0.05)] ${
+  const menuClasses = `absolute bottom-full left-0 z-[1000] mb-2 max-h-[400px] min-h-[50px] w-[380px] overflow-y-auto rounded-xl border border-gray-700 bg-[#2f2f2f] px-2 py-2 shadow-xl ${
       isOpen ? "block animate-fadeInDropdown" : "hidden"
   }`;
 
-  const iconClasses = `absolute bottom-[36.35%] left-[26.77%] right-[26.77%] top-[36.35%] bg-chat-dropdown-icon transition-transform duration-300 ease-in-out ${
+  const iconClasses = `transition-transform duration-300 ease-in-out ${
       isOpen ? "rotate-180" : ""
   }`
 
   return (
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 mb-3">
         <div className="relative inline-block" ref={dropdownRef}>
           <div className={dropdownClasses} onClick={handleToggle}>
-            <div className="order-0 flex h-5 w-122 flex-none flex-grow-0 flex-col items-start gap-1 p-0">
-              <div className="order-0 h-5 w-122 flex-none flex-grow-0 self-stretch whitespace-nowrap font-cisco text-sm font-normal leading-5 text-chat-text">
-                ✈️ Travel Prompts
-              </div>
-            </div>
-            <div className="relative order-1 h-6 w-6 flex-none flex-grow-0">
-              <div
-                  className={iconClasses}
-                  style={{ clipPath: "polygon(50% 100%, 0% 0%, 100% 0%)" }}
-              />
-            </div>
+            <Plane className="h-4 w-4 text-[#5feb9b]" />
+            <span className="font-inter text-sm font-medium text-gray-300">
+              Travel Prompts
+            </span>
+            <svg 
+              className={`h-4 w-4 text-gray-500 ${iconClasses}`} 
+              fill="none" 
+              viewBox="0 0 24 24" 
+              stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
           </div>
 
           <div className={menuClasses}>
             {isLoading || hasNoPrompts ? (
-                <LoadingSpinner message="Loading travel prompts, waiting for server response" />
+                <LoadingSpinner message="Loading travel prompts..." />
             ) : (
                 categories.map((category, index) => (
-                    <div key={`category-${index}`} className="px-2 py-2">
+                    <div key={`category-${index}`} className="py-1">
                       {/* Category header for travel prompts */}
                       {category.name === "travel" && (
-                          <div className="mb-2 h-[36px] w-full gap-2 bg-chat-dropdown-background pb-2 pl-[10px] pr-[10px] pt-2 font-cisco text-sm font-normal leading-5 tracking-[0%] text-chat-text opacity-60">
-                            🔍 SEARCH TRIPS
+                          <div className="mb-2 flex items-center gap-2 rounded-lg px-3 py-2" style={{background: 'linear-gradient(to right, #3ce98a15, #5feb9b15)'}}>
+                            <span className="text-sm">🔍</span>
+                            <span className="font-inter text-xs font-semibold uppercase tracking-wider text-[#5feb9b]">
+                              Search Trips
+                            </span>
                           </div>
                       )}
                       {category.name === "streaming" && (
-                          <div className="mb-2 h-[36px] w-full gap-2 bg-chat-dropdown-background pb-2 pl-[10px] pr-[10px] pt-2 font-cisco text-sm font-normal leading-5 tracking-[0%] text-chat-text opacity-60">
-                            ⚡ STREAMING SEARCH
+                          <div className="mb-2 flex items-center gap-2 rounded-lg px-3 py-2" style={{background: 'linear-gradient(to right, #7becac15, #94edbb15)'}}>
+                            <span className="text-sm">⚡</span>
+                            <span className="font-inter text-xs font-semibold uppercase tracking-wider text-[#7becac]">
+                              Streaming Search
+                            </span>
                           </div>
                       )}
                       {category.prompts.map((item, idx) => (
                           <div
                               key={`prompt-${index}-${idx}`}
-                              className={`flex mx-0.5 my-0.5 flex-col min-h-10 w-[calc(100%-4px)] cursor-pointer items-center bg-chat-dropdown-background px-2 py-[6px] transition-colors duration-200 ease-in-out hover:bg-chat-background-hover gap-y-1.5 border-t border-gray-400 border-opacity-40`}
+                              className="group mx-1 my-1 flex cursor-pointer flex-col rounded-lg border border-transparent px-3 py-3 transition-all duration-200 hover:bg-[#3a3a3a]"
                               onClick={() => handleItemClick(item.prompt)}
                           >
-                            <div className="w-full break-words font-cisco text-sm font-normal leading-5 tracking-[0%] text-chat-text">
+                            <div className="w-full break-words font-inter text-sm font-normal leading-5 text-gray-300 group-hover:text-white">
                               {item.prompt}
                             </div>
                             {item.description && (
-                                <div className="w-full break-words font-cisco text-xs font-normal leading-4 tracking-[0%] text-chat-text opacity-70">
+                                <div className="mt-1 w-full break-words font-inter text-xs font-normal leading-4 text-gray-500">
                                   {item.description}
                                 </div>
                             )}

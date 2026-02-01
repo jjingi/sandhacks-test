@@ -10,7 +10,7 @@
  * - External API connection (SerpAPI) instead of farm workers
  **/
 
-import { Plane, Hotel } from "lucide-react"
+import { Plane, Hotel, MapPin } from "lucide-react"
 import { Node, Edge } from "@xyflow/react"
 import supervisorIcon from "@/assets/supervisor.png"
 import {
@@ -93,7 +93,7 @@ const TRAVEL_SEARCH_CONFIG: GraphConfig = {
         githubLink: `${urlsConfig.github.baseUrl}/agents/flight`,
         agentDirectoryLink: urlsConfig.agentDirectory.baseUrl,
       },
-      position: { x: 250, y: 480 },
+      position: { x: 250, y: 480 },  // Left position for 3-agent layout
     },
     // Hotel Search Agent Node - A2A Server
     {
@@ -109,7 +109,23 @@ const TRAVEL_SEARCH_CONFIG: GraphConfig = {
         githubLink: `${urlsConfig.github.baseUrl}/agents/hotel`,
         agentDirectoryLink: urlsConfig.agentDirectory.baseUrl,
       },
-      position: { x: 550, y: 480 },
+      position: { x: 450, y: 480 },
+    },
+    // Activity Search Agent Node - A2A Server
+    {
+      id: NODE_IDS.VIETNAM_FARM,  // Reusing ID for compatibility
+      type: NODE_TYPES.CUSTOM,
+      data: {
+        icon: <MapPin className="dark-icon h-4 w-4" />,
+        label1: "Activity Agent",
+        label2: "A2A Server",
+        handles: HANDLE_TYPES.TARGET,
+        // A2A agent - verified
+        verificationStatus: VERIFICATION_STATUS.VERIFIED,
+        githubLink: `${urlsConfig.github.baseUrl}/agents/activity`,
+        agentDirectoryLink: urlsConfig.agentDirectory.baseUrl,
+      },
+      position: { x: 650, y: 480 },
     },
   ],
   edges: [
@@ -131,11 +147,20 @@ const TRAVEL_SEARCH_CONFIG: GraphConfig = {
       data: { label: EDGE_LABELS.A2A },  // A2A protocol over NATS
       type: EDGE_TYPES.CUSTOM,
     },
-    // Transport to Hotel Agent (A2A)
+    // Transport to Hotel Agent (A2A) - uses bottom_center handle for middle position
     {
       id: EDGE_IDS.TRANSPORT_TO_COLOMBIA,
       source: NODE_IDS.TRANSPORT,
       target: NODE_IDS.COLOMBIA_FARM,
+      sourceHandle: "bottom_center",
+      data: { label: EDGE_LABELS.A2A },  // A2A protocol over NATS
+      type: EDGE_TYPES.CUSTOM,
+    },
+    // Transport to Activity Agent (A2A)
+    {
+      id: EDGE_IDS.TRANSPORT_TO_VIETNAM,
+      source: NODE_IDS.TRANSPORT,
+      target: NODE_IDS.VIETNAM_FARM,
       sourceHandle: "bottom_right",
       data: { label: EDGE_LABELS.A2A },  // A2A protocol over NATS
       type: EDGE_TYPES.CUSTOM,
@@ -150,12 +175,14 @@ const TRAVEL_SEARCH_CONFIG: GraphConfig = {
       ids: [
         EDGE_IDS.TRANSPORT_TO_BRAZIL,
         EDGE_IDS.TRANSPORT_TO_COLOMBIA,
+        EDGE_IDS.TRANSPORT_TO_VIETNAM,
       ],
     },
     {
       ids: [
         NODE_IDS.BRAZIL_FARM,
         NODE_IDS.COLOMBIA_FARM,
+        NODE_IDS.VIETNAM_FARM,
       ],
     },
   ],
