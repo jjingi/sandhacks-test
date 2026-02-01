@@ -1,24 +1,76 @@
 # Travel Agent Docker Compose Configuration
 #
-# This compose file sets up the Travel Planning Agent environment.
-# The travel agent finds the cheapest flight + hotel combinations using SerpAPI.
+# This compose file sets up the Travel Planning Agent environment with A2A communication.
+# 
+# Architecture:
+#   User → Travel Supervisor → A2A/NATS → Flight Agent → SerpAPI
+#                            → A2A/NATS → Hotel Agent → SerpAPI
 #
 # Services:
-# - travel-supervisor: Main travel planning agent (port 8000)
+# - travel-supervisor: Main supervisor agent (port 8000)
+# - flight-agent: A2A agent for flight search (port 9001)
+# - hotel-agent: A2A agent for hotel search (port 9002)
+# - nats: Message transport for A2A communication
 # - ui: Frontend web interface (port 3000)
-# - nats: Message transport for agent communication
-# - Observability stack: ClickHouse, OTEL, Grafana
 #
 # Usage:
 #   docker-compose up -d              # Start all services
-#   docker-compose logs -f travel-supervisor  # View agent logs
+#   docker-compose logs -f travel-supervisor  # View supervisor logs
 #   docker-compose down               # Stop all services
 
 services:
   # =============================================================================
-  # Travel Supervisor Agent
+  # Flight Search Agent (A2A Server)
   # =============================================================================
-  # Main travel planning agent that searches for flights and hotels
+  # A2A agent that searches for flights using SerpAPI
+  flight-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.flight-agent
+    image: flight-agent:latest
+    container_name: flight-agent
+    env_file:
+      - .env
+    environment:
+      - DEFAULT_MESSAGE_TRANSPORT=${DEFAULT_MESSAGE_TRANSPORT:-NATS}
+      - TRANSPORT_SERVER_ENDPOINT=${TRANSPORT_SERVER_ENDPOINT:-nats://nats:4222}
+      - OTLP_HTTP_ENDPOINT=${OTLP_HTTP_ENDPOINT:-http://otel-collector:4318}
+      - SERPAPI_API_KEY=${SERPAPI_API_KEY}
+      - FLIGHT_AGENT_HOST=0.0.0.0
+      - FLIGHT_AGENT_PORT=9001
+    ports:
+      - "9001:9001"
+    depends_on:
+      - nats
+
+  # =============================================================================
+  # Hotel Search Agent (A2A Server)
+  # =============================================================================
+  # A2A agent that searches for hotels using SerpAPI
+  hotel-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.hotel-agent
+    image: hotel-agent:latest
+    container_name: hotel-agent
+    env_file:
+      - .env
+    environment:
+      - DEFAULT_MESSAGE_TRANSPORT=${DEFAULT_MESSAGE_TRANSPORT:-NATS}
+      - TRANSPORT_SERVER_ENDPOINT=${TRANSPORT_SERVER_ENDPOINT:-nats://nats:4222}
+      - OTLP_HTTP_ENDPOINT=${OTLP_HTTP_ENDPOINT:-http://otel-collector:4318}
+      - SERPAPI_API_KEY=${SERPAPI_API_KEY}
+      - HOTEL_AGENT_HOST=0.0.0.0
+      - HOTEL_AGENT_PORT=9002
+    ports:
+      - "9002:9002"
+    depends_on:
+      - nats
+
+  # =============================================================================
+  # Travel Supervisor Agent (A2A Client)
+  # =============================================================================
+  # Main travel planning agent that coordinates Flight and Hotel agents via A2A
   travel-supervisor:
     build:
       context: .
@@ -28,21 +80,23 @@ services:
     env_file:
       - .env
     environment:
-      # Transport settings (NATS for simple setup)
+      # Transport settings (NATS for A2A communication)
       - DEFAULT_MESSAGE_TRANSPORT=${DEFAULT_MESSAGE_TRANSPORT:-NATS}
       - TRANSPORT_SERVER_ENDPOINT=${TRANSPORT_SERVER_ENDPOINT:-nats://nats:4222}
       # Observability
       - OTLP_HTTP_ENDPOINT=${OTLP_HTTP_ENDPOINT:-http://otel-collector:4318}
-      # Identity auth (disabled by default for travel agent)
+      # Identity auth (disabled by default)
       - IDENTITY_AUTH_ENABLED=${IDENTITY_AUTH_ENABLED:-false}
       - IDENTITY_SERVICE_API_KEY=${IDENTITY_SERVICE_API_KEY_TRAVEL_SUPERVISOR:-dummy_api_key}
-      # SerpAPI configuration (required for travel search)
+      # SerpAPI (backup - agents have their own)
       - SERPAPI_API_KEY=${SERPAPI_API_KEY}
       - TRAVEL_HOTEL_CHECKIN_GAP_HOURS=${TRAVEL_HOTEL_CHECKIN_GAP_HOURS:-2}
     ports:
       - "8000:8000"
     depends_on:
       - nats
+      - flight-agent
+      - hotel-agent
 
   # =============================================================================
   # Message Transport

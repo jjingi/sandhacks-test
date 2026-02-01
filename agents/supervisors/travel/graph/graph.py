@@ -27,7 +27,8 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.graph import MessagesState, StateGraph, END
 from ioa_observe.sdk.decorators import agent, graph
 
-from agents.travel.serpapi_tools import search_flights, search_hotels
+# Import A2A tools for communicating with Flight and Hotel agents
+from agents.supervisors.travel.graph.tools import get_flights_via_a2a, get_hotels_via_a2a
 from agents.travel.travel_logic import find_cheapest_plan
 from agents.supervisors.travel.graph.models import TravelSearchArgs
 from common.llm import get_llm
@@ -260,12 +261,13 @@ Respond with ONLY 'travel_search' or 'general':""",
             
             return {"messages": [AIMessage(content=clarification_msg)], "search_params": params.model_dump()}
 
-        # Step 3: Search for flights and hotels
-        logger.info(f"Searching: {params.origin} -> {params.destination}, {params.start_date} to {params.end_date}")
+        # Step 3: Search for flights and hotels via A2A agents
+        logger.info(f"Searching via A2A: {params.origin} -> {params.destination}, {params.start_date} to {params.end_date}")
         
         try:
-            # Search for flights
-            flights = await search_flights(
+            # Search for flights via A2A to Flight Agent
+            logger.info("Sending A2A request to Flight Search Agent...")
+            flights = await get_flights_via_a2a(
                 params.origin,
                 params.destination,
                 params.start_date,
@@ -273,17 +275,18 @@ Respond with ONLY 'travel_search' or 'general':""",
             )
             
             if not flights:
-                return {"messages": [AIMessage(content=f"I couldn't find any flights from {params.origin} to {params.destination} for those dates. Please try different dates or locations.")]}
+                return {"messages": [AIMessage(content=f"I couldn't find any flights from {params.origin} to {params.destination} for those dates. The Flight Agent may be unavailable. Please try again.")]}
 
-            # Search for hotels
-            hotels = await search_hotels(
+            # Search for hotels via A2A to Hotel Agent
+            logger.info("Sending A2A request to Hotel Search Agent...")
+            hotels = await get_hotels_via_a2a(
                 params.destination,
                 params.start_date,
                 params.end_date,
             )
             
             if not hotels:
-                return {"messages": [AIMessage(content=f"I found flights but couldn't find hotels in {params.destination}. You might want to search for hotels in a nearby area.")]}
+                return {"messages": [AIMessage(content=f"I found flights but couldn't find hotels in {params.destination}. The Hotel Agent may be unavailable.")]}
 
             # Step 4: Find cheapest valid plan
             plan = find_cheapest_plan(flights, hotels)

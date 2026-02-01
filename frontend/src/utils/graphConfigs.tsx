@@ -34,14 +34,16 @@ export interface GraphConfig {
 }
 
 /**
- * Travel Search Configuration
+ * Travel Search Configuration with A2A Communication
  * 
- * Simple graph showing:
- * - Travel Supervisor: Main agent that processes user requests
- * - SerpAPI: External service for flight and hotel searches
+ * Architecture:
+ * - Travel Supervisor: Main agent that coordinates the search (A2A Client)
+ * - NATS Transport: A2A message transport layer
+ * - Flight Agent: A2A agent that searches flights via SerpAPI
+ * - Hotel Agent: A2A agent that searches hotels via SerpAPI
  */
 const TRAVEL_SEARCH_CONFIG: GraphConfig = {
-  title: "Travel Planning Agent Network",
+  title: "Travel Planning Agent Network (A2A)",
   nodes: [
     // Travel Supervisor Node - Main agent
     {
@@ -77,35 +79,35 @@ const TRAVEL_SEARCH_CONFIG: GraphConfig = {
       },
       position: { x: 350, y: 280 },
     },
-    // Flight Search Node - SerpAPI Flights
+    // Flight Search Agent Node - A2A Server
     {
       id: NODE_IDS.BRAZIL_FARM,  // Reusing ID for compatibility
       type: NODE_TYPES.CUSTOM,
       data: {
         icon: <Plane className="dark-icon h-4 w-4" />,
-        label1: "SerpAPI",
-        label2: "Flight Search",
+        label1: "Flight Agent",
+        label2: "A2A Server",
         handles: HANDLE_TYPES.TARGET,
-        // External API - no verification needed
-        verificationStatus: VERIFICATION_STATUS.NONE,
-        githubLink: "https://serpapi.com/google-flights-api",
-        agentDirectoryLink: "https://serpapi.com",
+        // A2A agent - verified
+        verificationStatus: VERIFICATION_STATUS.VERIFIED,
+        githubLink: `${urlsConfig.github.baseUrl}/agents/flight`,
+        agentDirectoryLink: urlsConfig.agentDirectory.baseUrl,
       },
       position: { x: 250, y: 480 },
     },
-    // Hotel Search Node - SerpAPI Hotels
+    // Hotel Search Agent Node - A2A Server
     {
       id: NODE_IDS.COLOMBIA_FARM,  // Reusing ID for compatibility
       type: NODE_TYPES.CUSTOM,
       data: {
         icon: <Hotel className="dark-icon h-4 w-4" />,
-        label1: "SerpAPI",
-        label2: "Hotel Search",
+        label1: "Hotel Agent",
+        label2: "A2A Server",
         handles: HANDLE_TYPES.TARGET,
-        // External API - no verification needed
-        verificationStatus: VERIFICATION_STATUS.NONE,
-        githubLink: "https://serpapi.com/google-hotels-api",
-        agentDirectoryLink: "https://serpapi.com",
+        // A2A agent - verified
+        verificationStatus: VERIFICATION_STATUS.VERIFIED,
+        githubLink: `${urlsConfig.github.baseUrl}/agents/hotel`,
+        agentDirectoryLink: urlsConfig.agentDirectory.baseUrl,
       },
       position: { x: 550, y: 480 },
     },
@@ -120,22 +122,22 @@ const TRAVEL_SEARCH_CONFIG: GraphConfig = {
       data: { label: EDGE_LABELS.A2A },
       type: EDGE_TYPES.CUSTOM,
     },
-    // Transport to Flight Search
+    // Transport to Flight Agent (A2A)
     {
       id: EDGE_IDS.TRANSPORT_TO_BRAZIL,
       source: NODE_IDS.TRANSPORT,
       target: NODE_IDS.BRAZIL_FARM,
       sourceHandle: "bottom_left",
-      data: { label: "HTTP" },  // SerpAPI uses HTTP
+      data: { label: EDGE_LABELS.A2A },  // A2A protocol over NATS
       type: EDGE_TYPES.CUSTOM,
     },
-    // Transport to Hotel Search
+    // Transport to Hotel Agent (A2A)
     {
       id: EDGE_IDS.TRANSPORT_TO_COLOMBIA,
       source: NODE_IDS.TRANSPORT,
       target: NODE_IDS.COLOMBIA_FARM,
       sourceHandle: "bottom_right",
-      data: { label: "HTTP" },  // SerpAPI uses HTTP
+      data: { label: EDGE_LABELS.A2A },  // A2A protocol over NATS
       type: EDGE_TYPES.CUSTOM,
     },
   ],

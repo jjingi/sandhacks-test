@@ -4,122 +4,223 @@
 """
 Travel Supervisor Tools
 
-Tool functions exposed to the LangGraph workflow for searching
-flights and hotels, and finding optimal travel plans.
-
-These tools wrap the core travel module functions and add
-additional error handling and logging for the supervisor context.
+A2A tools for communicating with Flight and Hotel search agents.
+These tools use the A2A protocol to send requests and receive responses
+via NATS transport.
 """
 
 import logging
-from typing import Optional
+import json
+from uuid import uuid4
 
-from langchain_core.tools import tool
+from langchain_core.tools import tool, ToolException
 from ioa_observe.sdk.decorators import tool as ioa_tool_decorator
 
-from agents.travel.serpapi_tools import search_flights, search_hotels
+from a2a.types import (
+    SendMessageRequest,
+    MessageSendParams,
+    Message,
+    Part,
+    TextPart,
+    Role,
+)
+from agntcy_app_sdk.semantic.a2a.protocol import A2AProtocol
+
+from agents.flight.card import AGENT_CARD as FLIGHT_AGENT_CARD
+from agents.hotel.card import AGENT_CARD as HOTEL_AGENT_CARD
+from agents.supervisors.travel.graph.shared import get_factory
+from config.config import (
+    DEFAULT_MESSAGE_TRANSPORT,
+    TRANSPORT_SERVER_ENDPOINT,
+    TRAVEL_HOTEL_CHECKIN_GAP_HOURS,
+)
 from agents.travel.travel_logic import find_cheapest_plan
-from config.config import TRAVEL_HOTEL_CHECKIN_GAP_HOURS
 
 logger = logging.getLogger("lungo.travel.supervisor.tools")
 
 
+class A2AAgentError(ToolException):
+    """Custom exception for A2A communication errors."""
+    pass
+
+
+async def _send_a2a_message(agent_card, message: str) -> str:
+    """
+    Send a message to an A2A agent and wait for response.
+    
+    Args:
+        agent_card: The target agent's card
+        message: Message to send
+        
+    Returns:
+        Response text from the agent
+        
+    Raises:
+        A2AAgentError: If communication fails
+    """
+    factory = get_factory()
+    if not factory:
+        raise A2AAgentError("Factory not initialized")
+    
+    # Create transport
+    transport = factory.create_transport(
+        DEFAULT_MESSAGE_TRANSPORT,
+        endpoint=TRANSPORT_SERVER_ENDPOINT,
+        name="default/default/travel_supervisor",
+    )
+    
+    try:
+        # Create A2A client
+        client = await factory.create_client(
+            "A2A",
+            agent_topic=A2AProtocol.create_agent_topic(agent_card),
+            transport=transport,
+        )
+        
+        # Create request
+        request = SendMessageRequest(
+            id=str(uuid4()),
+            params=MessageSendParams(
+                message=Message(
+                    messageId=str(uuid4()),
+                    role=Role.user,
+                    parts=[Part(TextPart(text=message))],
+                ),
+            )
+        )
+        
+        # Send message and get response
+        logger.info(f"Sending A2A message to {agent_card.name}...")
+        response = await client.send_message(request)
+        logger.info(f"A2A response received from {agent_card.name}")
+        
+        if response.root.result and response.root.result.parts:
+            part = response.root.result.parts[0].root
+            if hasattr(part, "text"):
+                return part.text.strip()
+            else:
+                raise A2AAgentError("Agent returned result without text content")
+        elif response.root.error:
+            logger.error(f"A2A error: {response.root.error.message}")
+            raise A2AAgentError(f"Agent error: {response.root.error.message}")
+        else:
+            raise A2AAgentError("Unknown response type from agent")
+            
+    except Exception as e:
+        logger.error(f"Failed to communicate with agent {agent_card.name}: {e}")
+        raise A2AAgentError(f"Communication failed: {e}")
+
+
 @tool
-@ioa_tool_decorator(name="search_travel_flights")
-async def search_travel_flights(
+@ioa_tool_decorator(name="search_flights_a2a")
+async def search_flights_a2a(
     origin: str,
     destination: str,
     outbound_date: str,
     return_date: str,
 ) -> str:
     """
-    Search for flights between two locations.
-    
-    Use this tool to find available flights for a trip.
-    Results are sorted by price (cheapest first).
+    Search for flights using the Flight Search Agent via A2A.
     
     Args:
-        origin: Departure airport code or city (e.g., "LAX", "New York")
-        destination: Arrival airport code or city (e.g., "NRT", "Tokyo")
-        outbound_date: Departure date in YYYY-MM-DD format
-        return_date: Return date in YYYY-MM-DD format
-    
+        origin: Departure airport code (e.g., "LAX")
+        destination: Arrival airport code (e.g., "NRT")
+        outbound_date: Departure date (YYYY-MM-DD)
+        return_date: Return date (YYYY-MM-DD)
+        
     Returns:
-        String summary of available flights with prices
+        JSON string with flight results
     """
-    logger.info(f"Tool: Searching flights {origin} -> {destination}, {outbound_date} to {return_date}")
+    logger.info(f"Sending A2A request to Flight Agent: {origin} -> {destination}")
+    
+    # Format message for the flight agent
+    message = f"origin:{origin} destination:{destination} outbound:{outbound_date} return:{return_date}"
     
     try:
-        flights = await search_flights(origin, destination, outbound_date, return_date)
-        
-        if not flights:
-            return f"No flights found from {origin} to {destination} for the specified dates."
-        
-        # Format results for display
-        result_lines = [f"Found {len(flights)} flights from {origin} to {destination}:\n"]
-        
-        for i, flight in enumerate(flights[:5], 1):  # Show top 5 flights
-            result_lines.append(
-                f"{i}. {flight.get('airline', 'Unknown')} - ${flight.get('price', 'N/A')}\n"
-                f"   Departure: {flight.get('departure_time', 'N/A')}\n"
-                f"   Arrival: {flight.get('arrival_time', 'N/A')}\n"
-                f"   Stops: {flight.get('stops', 0)}\n"
-            )
-        
-        return "\n".join(result_lines)
-        
-    except Exception as e:
-        logger.error(f"Error searching flights: {e}")
-        return f"Error searching flights: {str(e)}"
+        result = await _send_a2a_message(FLIGHT_AGENT_CARD, message)
+        return result
+    except A2AAgentError as e:
+        logger.error(f"Flight search A2A error: {e}")
+        return json.dumps({"status": "error", "message": str(e)})
 
 
 @tool
-@ioa_tool_decorator(name="search_travel_hotels")
-async def search_travel_hotels(
+@ioa_tool_decorator(name="search_hotels_a2a")
+async def search_hotels_a2a(
     location: str,
     check_in_date: str,
     check_out_date: str,
 ) -> str:
     """
-    Search for hotels at a destination.
-    
-    Use this tool to find available hotels for accommodation.
-    Results are sorted by price (cheapest first).
+    Search for hotels using the Hotel Search Agent via A2A.
     
     Args:
-        location: City or area to search (e.g., "Tokyo", "Paris")
-        check_in_date: Check-in date in YYYY-MM-DD format
-        check_out_date: Check-out date in YYYY-MM-DD format
-    
+        location: City or area name (e.g., "Tokyo")
+        check_in_date: Check-in date (YYYY-MM-DD)
+        check_out_date: Check-out date (YYYY-MM-DD)
+        
     Returns:
-        String summary of available hotels with prices
+        JSON string with hotel results
     """
-    logger.info(f"Tool: Searching hotels in {location}, {check_in_date} to {check_out_date}")
+    logger.info(f"Sending A2A request to Hotel Agent: {location}")
+    
+    # Format message for the hotel agent
+    message = f"location:{location} check_in:{check_in_date} check_out:{check_out_date}"
     
     try:
-        hotels = await search_hotels(location, check_in_date, check_out_date)
-        
-        if not hotels:
-            return f"No hotels found in {location} for the specified dates."
-        
-        # Format results for display
-        result_lines = [f"Found {len(hotels)} hotels in {location}:\n"]
-        
-        for i, hotel in enumerate(hotels[:5], 1):  # Show top 5 hotels
-            rating = hotel.get('rating', 0)
-            rating_str = f"Rating: {rating}/5" if rating else "Rating: N/A"
-            
-            result_lines.append(
-                f"{i}. {hotel.get('name', 'Unknown Hotel')} - ${hotel.get('price', 'N/A')}\n"
-                f"   {rating_str}\n"
-                f"   Check-in: {hotel.get('check_in_time', '15:00')}\n"
-            )
-        
-        return "\n".join(result_lines)
-        
-    except Exception as e:
-        logger.error(f"Error searching hotels: {e}")
-        return f"Error searching hotels: {str(e)}"
+        result = await _send_a2a_message(HOTEL_AGENT_CARD, message)
+        return result
+    except A2AAgentError as e:
+        logger.error(f"Hotel search A2A error: {e}")
+        return json.dumps({"status": "error", "message": str(e)})
+
+
+async def get_flights_via_a2a(origin: str, destination: str, outbound_date: str, return_date: str) -> list:
+    """
+    Get flights via A2A and parse the response.
+    
+    This is the main function called by the Travel Supervisor graph
+    to search for flights through the Flight Agent.
+    
+    Returns:
+        List of flight dictionaries
+    """
+    result_json = await search_flights_a2a(origin, destination, outbound_date, return_date)
+    
+    try:
+        result = json.loads(result_json)
+        if result.get("status") == "success":
+            return result.get("flights", [])
+        else:
+            logger.error(f"Flight search failed: {result.get('message')}")
+            return []
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse flight results: {result_json}")
+        return []
+
+
+async def get_hotels_via_a2a(location: str, check_in_date: str, check_out_date: str) -> list:
+    """
+    Get hotels via A2A and parse the response.
+    
+    This is the main function called by the Travel Supervisor graph
+    to search for hotels through the Hotel Agent.
+    
+    Returns:
+        List of hotel dictionaries
+    """
+    result_json = await search_hotels_a2a(location, check_in_date, check_out_date)
+    
+    try:
+        result = json.loads(result_json)
+        if result.get("status") == "success":
+            return result.get("hotels", [])
+        else:
+            logger.error(f"Hotel search failed: {result.get('message')}")
+            return []
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse hotel results: {result_json}")
+        return []
 
 
 @tool
@@ -131,10 +232,10 @@ async def find_best_travel_plan(
     end_date: str,
 ) -> str:
     """
-    Find the cheapest flight + hotel combination for a trip.
+    Find the cheapest flight + hotel combination for a trip using A2A agents.
     
-    This tool searches for both flights and hotels, then finds the
-    optimal combination considering:
+    This tool coordinates with Flight and Hotel agents via A2A to find
+    the optimal combination considering:
     - Total price (flight + hotel)
     - Timing constraints (hotel check-in must be after flight arrival + buffer)
     
@@ -147,18 +248,20 @@ async def find_best_travel_plan(
     Returns:
         Detailed summary of the best travel plan found
     """
-    logger.info(f"Tool: Finding best plan {origin} -> {destination}, {start_date} to {end_date}")
+    logger.info(f"Tool: Finding best plan via A2A: {origin} -> {destination}, {start_date} to {end_date}")
     
     try:
-        # Search for flights and hotels
-        flights = await search_flights(origin, destination, start_date, end_date)
-        hotels = await search_hotels(destination, start_date, end_date)
+        # Search for flights via A2A
+        flights = await get_flights_via_a2a(origin, destination, start_date, end_date)
+        
+        # Search for hotels via A2A
+        hotels = await get_hotels_via_a2a(destination, start_date, end_date)
         
         if not flights:
-            return f"No flights found from {origin} to {destination}. Please try different dates or locations."
+            return f"No flights found from {origin} to {destination}. The Flight Agent may be unavailable."
         
         if not hotels:
-            return f"No hotels found in {destination}. Please try different dates or a different area."
+            return f"No hotels found in {destination}. The Hotel Agent may be unavailable."
         
         # Find cheapest valid combination
         plan = find_cheapest_plan(flights, hotels)
@@ -167,7 +270,7 @@ async def find_best_travel_plan(
             return (
                 f"Could not find a valid flight + hotel combination. "
                 f"This may happen if hotel check-in times don't align with flight arrivals. "
-                f"Try adjusting your dates or increasing the gap between arrival and check-in."
+                f"Try adjusting your dates."
             )
         
         # Format the result
