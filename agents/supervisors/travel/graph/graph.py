@@ -18,7 +18,7 @@ Node Flow:
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from pydantic import BaseModel, Field
 from langchain_core.prompts import PromptTemplate
@@ -278,15 +278,18 @@ Respond with ONLY 'travel_search' or 'general':""",
                 return {"messages": [AIMessage(content=f"I couldn't find any flights from {params.origin} to {params.destination} for those dates. The Flight Agent may be unavailable. Please try again.")]}
 
             # Search for hotels via A2A to Hotel Agent
-            logger.info("Sending A2A request to Hotel Search Agent...")
+            # Use destination_city (city name like "Paris") not destination (airport code like "CDG")
+            # Google Hotels needs city names, not airport codes
+            hotel_location = params.destination_city or params.destination
+            logger.info(f"Sending A2A request to Hotel Search Agent for location: {hotel_location}")
             hotels = await get_hotels_via_a2a(
-                params.destination,
+                hotel_location,
                 params.start_date,
                 params.end_date,
             )
             
             if not hotels:
-                return {"messages": [AIMessage(content=f"I found flights but couldn't find hotels in {params.destination}. The Hotel Agent may be unavailable.")]}
+                return {"messages": [AIMessage(content=f"I found flights but couldn't find hotels in {hotel_location}. The Hotel Agent may be unavailable.")]}
 
             # Step 4: Find cheapest valid plan
             plan = find_cheapest_plan(flights, hotels)
@@ -457,79 +460,209 @@ IMPORTANT RULES:
             "minneapolis": "MSP",
             "portland": "PDX",
             "san diego": "SAN",
+            "san jose": "SJC",
             "tampa": "TPA",
             "charlotte": "CLT",
             "houston": "IAH",
         }
         
+        # Reverse mapping: airport code to city name (for hotel searches)
+        # Used when user provides airport code directly, we need city name for hotels
+        airport_to_city = {
+            "NRT": "Tokyo, Japan",
+            "HND": "Tokyo, Japan",
+            "CDG": "Paris, France",
+            "ORY": "Paris, France",
+            "LHR": "London, UK",
+            "LGW": "London, UK",
+            "JFK": "New York, NY",
+            "EWR": "New York, NY",
+            "LGA": "New York, NY",
+            "LAX": "Los Angeles, CA",
+            "SFO": "San Francisco, CA",
+            "ORD": "Chicago, IL",
+            "DFW": "Dallas, TX",
+            "MIA": "Miami, FL",
+            "SEA": "Seattle, WA",
+            "BOS": "Boston, MA",
+            "ATL": "Atlanta, GA",
+            "DEN": "Denver, CO",
+            "LAS": "Las Vegas, NV",
+            "MCO": "Orlando, FL",
+            "HKG": "Hong Kong",
+            "SIN": "Singapore",
+            "SYD": "Sydney, Australia",
+            "DXB": "Dubai, UAE",
+            "ICN": "Seoul, South Korea",
+            "BKK": "Bangkok, Thailand",
+            "FCO": "Rome, Italy",
+            "AMS": "Amsterdam, Netherlands",
+            "FRA": "Frankfurt, Germany",
+            "YYZ": "Toronto, Canada",
+            "YVR": "Vancouver, Canada",
+            "MEX": "Mexico City, Mexico",
+            "CUN": "Cancun, Mexico",
+            "KIX": "Osaka, Japan",
+            "PEK": "Beijing, China",
+            "PVG": "Shanghai, China",
+            "BOM": "Mumbai, India",
+            "DEL": "Delhi, India",
+            "MAD": "Madrid, Spain",
+            "BCN": "Barcelona, Spain",
+            "BER": "Berlin, Germany",
+            "MUC": "Munich, Germany",
+            "ZRH": "Zurich, Switzerland",
+            "VIE": "Vienna, Austria",
+            "LIS": "Lisbon, Portugal",
+            "DUB": "Dublin, Ireland",
+            "SVO": "Moscow, Russia",
+            "IST": "Istanbul, Turkey",
+            "CAI": "Cairo, Egypt",
+            "JNB": "Johannesburg, South Africa",
+            "CPT": "Cape Town, South Africa",
+            "NBO": "Nairobi, Kenya",
+            "AKL": "Auckland, New Zealand",
+            "MEL": "Melbourne, Australia",
+            "BNE": "Brisbane, Australia",
+            "HNL": "Honolulu, HI",
+            "AUS": "Austin, TX",
+            "PHX": "Phoenix, AZ",
+            "PHL": "Philadelphia, PA",
+            "DCA": "Washington, DC",
+            "IAD": "Washington, DC",
+            "DTW": "Detroit, MI",
+            "MSP": "Minneapolis, MN",
+            "PDX": "Portland, OR",
+            "SAN": "San Diego, CA",
+            "SJC": "San Jose, CA",
+            "TPA": "Tampa, FL",
+            "CLT": "Charlotte, NC",
+            "IAH": "Houston, TX",
+        }
+        
         # Check if origin needs conversion
         if params.origin:
             origin_lower = params.origin.lower().strip()
+            original_origin = params.origin.strip()
+            
             if origin_lower in city_to_airport:
-                logger.info(f"Converting origin '{params.origin}' to '{city_to_airport[origin_lower]}'")
+                # User provided city name - store it and convert to airport code
+                params.origin_city = original_origin.title()  # Store original city name
                 params.origin = city_to_airport[origin_lower]
+                logger.info(f"Converting origin '{original_origin}' to airport code '{params.origin}'")
             else:
-                # Make sure it's uppercase (might already be an airport code)
-                params.origin = params.origin.upper().strip()
+                # User provided airport code - look up city name for display
+                airport_code = original_origin.upper()
+                params.origin = airport_code
+                params.origin_city = airport_to_city.get(airport_code, original_origin)
+                logger.info(f"Origin is airport code '{airport_code}', city: '{params.origin_city}'")
         
         # Check if destination needs conversion
         if params.destination:
             dest_lower = params.destination.lower().strip()
+            original_dest = params.destination.strip()
+            
             if dest_lower in city_to_airport:
-                logger.info(f"Converting destination '{params.destination}' to '{city_to_airport[dest_lower]}'")
+                # User provided city name - store it and convert to airport code
+                params.destination_city = original_dest.title()  # Store original city name for hotel search
                 params.destination = city_to_airport[dest_lower]
+                logger.info(f"Converting destination '{original_dest}' to airport code '{params.destination}', keeping city '{params.destination_city}' for hotels")
             else:
-                # Make sure it's uppercase (might already be an airport code)
-                params.destination = params.destination.upper().strip()
+                # User provided airport code - look up city name for hotel search
+                airport_code = original_dest.upper()
+                params.destination = airport_code
+                params.destination_city = airport_to_city.get(airport_code, original_dest)
+                logger.info(f"Destination is airport code '{airport_code}', city for hotels: '{params.destination_city}'")
         
         return params
 
     def _format_travel_plan(self, plan: dict, params: TravelSearchArgs) -> str:
         """
-        Format a travel plan into a user-friendly response.
-        
-        Creates a well-structured summary with:
-        - Total cost prominently displayed
-        - Flight details (airline, times, stops)
-        - Hotel details (name, price, rating)
-        - Trip summary with timing info
-        
-        Args:
-            plan: Travel plan from find_cheapest_plan()
-            params: Original search parameters
-        
-        Returns:
-            Formatted string response
+        Format a travel plan with markdown-style sections: total cost,
+        outbound flight, return flight (with full details when available),
+        hotel details, and trip summary.
         """
         flight = plan["flight"]
         hotel = plan["hotel"]
+        return_flight = flight.get("return_flight")
+
+        outbound_stops = flight.get("stops", 0)
+        outbound_stops_text = "(Non-stop)" if outbound_stops == 0 else f"({outbound_stops} stop{'s' if outbound_stops > 1 else ''})"
+
+        overall_rating = hotel.get("overall_rating", 0) or hotel.get("rating", 0) or 0
+        rating_display = f"{'⭐' * int(overall_rating)}{'½' if overall_rating and overall_rating % 1 >= 0.5 else ''} ({overall_rating:.1f}/5)" if overall_rating else "N/A"
+        location_rating = hotel.get("location_rating", 0) or 0
+        location_display = f"{location_rating:.1f}/5" if location_rating else "N/A"
+
+        # Calculate number of nights for hotel total cost
+        # Google Hotels returns per-night price, so we multiply by nights
+        try:
+            start_dt = datetime.strptime(params.start_date.strip()[:10], "%Y-%m-%d")
+            end_dt = datetime.strptime(params.end_date.strip()[:10], "%Y-%m-%d")
+            nights = max(1, (end_dt - start_dt).days)
+        except (ValueError, TypeError, AttributeError):
+            nights = 1  # Default to 1 night if date parsing fails
+
+        # Get prices for cost breakdown
+        flight_price = flight.get('price') or 0
+        hotel_price_per_night = hotel.get('price') or 0
         
-        # Build response with clear sections
+        # Calculate total hotel cost = per-night rate × number of nights
+        hotel_total_price = hotel_price_per_night * nights
+        
+        # Calculate correct total price
+        total_price = flight_price + hotel_total_price
+        
+        # Format nights text
+        nights_text = f"{nights} night{'s' if nights != 1 else ''}"
+
         response = f"""🎉 **Great news! I found the best deal for your trip!**
 
-**💰 Total Cost: ${plan['total_price']:.2f}**
+**💰 Total Cost: ${total_price:.2f}**
+- ✈️ Flight: ${flight_price:.2f}
+- 🏨 Hotel: ${hotel_total_price:.2f} ({nights_text})
 
 ---
 
-✈️ **Flight Details**
+✈️ **Outbound Flight** ({params.origin} → {params.destination})
 - **Airline**: {flight.get('airline', 'Unknown')}
-- **Price**: ${flight.get('price', 0):.2f}
+- **Price**: ${flight_price:.2f} (round-trip)
 - **Departure**: {flight.get('departure_time', 'N/A')}
 - **Arrival**: {flight.get('arrival_time', 'N/A')}
-- **Stops**: {flight.get('stops', 0)} {'(Non-stop)' if flight.get('stops', 0) == 0 else ''}
+- **Stops**: {outbound_stops} {outbound_stops_text}
+"""
 
+        if return_flight:
+            return_stops = return_flight.get("stops", 0)
+            return_stops_text = "(Non-stop)" if return_stops == 0 else f"({return_stops} stop{'s' if return_stops > 1 else ''})"
+            response += f"""
+🔙 **Return Flight** ({params.destination} → {params.origin})
+- **Airline**: {return_flight.get('airline', flight.get('airline', 'Unknown'))}
+- **Departure**: {return_flight.get('departure_time', 'N/A')}
+- **Arrival**: {return_flight.get('arrival_time', 'N/A')}
+- **Stops**: {return_stops} {return_stops_text}
+"""
+        else:
+            response += f"""
+🔙 **Return Flight** ({params.destination} → {params.origin})
+- Return flight included in round-trip price
+- Specific return times will be shown when booking
+"""
+
+        response += f"""
 🏨 **Hotel Details**
 - **Name**: {hotel.get('name', 'Unknown Hotel')}
-- **Price**: ${hotel.get('price', 0):.2f}
-- **Rating**: {'⭐' * int(hotel.get('rating', 0)) if hotel.get('rating') else 'N/A'}
-- **Check-in**: {hotel.get('check_in_time', '15:00')}
+- **Price**: ${hotel_price_per_night:.2f}/night × {nights} = ${hotel_total_price:.2f} total
+- **Overall Rating**: {rating_display}
+- **Location Rating**: {location_display}
+- **Check-in**: {hotel.get('check_in_time', '3:00 PM')}
 
 ---
 
 📋 **Trip Summary**
-- **Route**: {params.origin} → {params.destination}
+- **Route**: {params.origin} → {params.destination} → {params.origin}
 - **Dates**: {params.start_date} to {params.end_date}
-- **Arrival Time**: {plan.get('arrival_time', 'N/A')}
+- **Outbound Arrival**: {plan.get('arrival_time', 'N/A')}
 - **Buffer to Hotel**: {plan.get('gap_hours', TRAVEL_HOTEL_CHECKIN_GAP_HOURS)} hours
 
 Would you like me to search for different dates or another destination?"""

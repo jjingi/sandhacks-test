@@ -323,6 +323,7 @@ async def find_best_travel_plan(
     destination: str,
     start_date: str,
     end_date: str,
+    destination_city: str = None,
 ) -> str:
     """
     Find the cheapest flight + hotel combination for a trip using A2A agents.
@@ -333,21 +334,26 @@ async def find_best_travel_plan(
     - Timing constraints (hotel check-in must be after flight arrival + buffer)
     
     Args:
-        origin: Departure airport code or city
-        destination: Arrival airport code or city
+        origin: Departure airport code (e.g., "LAX", "JFK")
+        destination: Arrival airport code (e.g., "CDG", "NRT") - used for flight search
         start_date: Trip start date in YYYY-MM-DD format
         end_date: Trip end date in YYYY-MM-DD format
+        destination_city: City name for hotel search (e.g., "Paris, France", "Tokyo, Japan")
+                         If not provided, uses destination (which may fail for hotel searches)
     
     Returns:
         Detailed summary of the best travel plan found
     """
-    logger.info(f"Tool: Finding best plan via A2A: {origin} -> {destination}, {start_date} to {end_date}")
+    # Use city name for hotels, airport code for flights
+    hotel_location = destination_city or destination
+    logger.info(f"Tool: Finding best plan via A2A: {origin} -> {destination}, hotels in {hotel_location}, {start_date} to {end_date}")
     
     try:
         # Search for flights via A2A using internal functions
         # (not the @tool decorated versions to avoid 'not callable' error)
         flight_result = await _search_flights_internal(origin, destination, start_date, end_date)
-        hotel_result = await _search_hotels_internal(destination, start_date, end_date)
+        # Use city name for hotel search (Google Hotels needs city names, not airport codes)
+        hotel_result = await _search_hotels_internal(hotel_location, start_date, end_date)
         
         # Parse flight results
         try:
@@ -367,7 +373,7 @@ async def find_best_travel_plan(
             return f"No flights found from {origin} to {destination}. The Flight Agent may be unavailable."
         
         if not hotels:
-            return f"No hotels found in {destination}. The Hotel Agent may be unavailable."
+            return f"No hotels found in {hotel_location}. The Hotel Agent may be unavailable."
         
         # Find cheapest valid combination
         plan = find_cheapest_plan(flights, hotels)
