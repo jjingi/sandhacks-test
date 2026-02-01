@@ -4,7 +4,7 @@
  **/
 
 import React, { useState } from "react"
-import { Plus, MessageSquare, Clock, Trash2, ChevronDown } from "lucide-react"
+import { Plus, MessageSquare, Trash2 } from "lucide-react"
 import {
   PatternType,
 } from "@/utils/patternUtils"
@@ -18,6 +18,7 @@ interface SidebarProps {
   onDeleteChat?: (chatId: string) => void
   chatHistory: ChatHistoryItem[]
   currentChatId: string | null
+  isOpen?: boolean
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
@@ -28,8 +29,9 @@ const Sidebar: React.FC<SidebarProps> = ({
   onDeleteChat,
   chatHistory,
   currentChatId,
+  isOpen = true,
 }) => {
-  const [isHistoryExpanded, setIsHistoryExpanded] = useState(true)
+  const [hoveredChatId, setHoveredChatId] = useState<string | null>(null)
 
   const handleNewChat = () => {
     if (onNewChat) onNewChat()
@@ -44,92 +46,106 @@ const Sidebar: React.FC<SidebarProps> = ({
     if (onDeleteChat) onDeleteChat(chatId)
   }
 
-  const formatTimestamp = (date: Date) => {
+  // Group chats by time period
+  const groupChats = () => {
     const now = new Date()
-    const dateObj = new Date(date)
-    const diffMs = now.getTime() - dateObj.getTime()
-    const diffMins = Math.floor(diffMs / 60000)
-    const diffHours = Math.floor(diffMs / 3600000)
-    const diffDays = Math.floor(diffMs / 86400000)
+    const groups: { [key: string]: ChatHistoryItem[] } = {
+      'Today': [],
+      'Yesterday': [],
+      'Previous 7 Days': [],
+      'Previous 30 Days': [],
+    }
 
-    if (diffMins < 1) return "Just now"
-    if (diffMins < 60) return `${diffMins}m ago`
-    if (diffHours < 24) return `${diffHours}h ago`
-    if (diffDays < 7) return `${diffDays}d ago`
-    return dateObj.toLocaleDateString()
+    chatHistory.forEach(chat => {
+      const chatDate = new Date(chat.timestamp)
+      const diffMs = now.getTime() - chatDate.getTime()
+      const diffDays = Math.floor(diffMs / 86400000)
+
+      if (diffDays === 0) groups['Today'].push(chat)
+      else if (diffDays === 1) groups['Yesterday'].push(chat)
+      else if (diffDays < 7) groups['Previous 7 Days'].push(chat)
+      else groups['Previous 30 Days'].push(chat)
+    })
+
+    return groups
   }
 
+  const groupedChats = groupChats()
+
+  // Don't render if closed
+  if (!isOpen) return null
+
   return (
-    <div className="flex h-full w-64 flex-none flex-col border-r border-gray-800 bg-[#171717] font-inter lg:w-[260px]">
-      {/* New Chat Button */}
-      <div className="p-3">
+    <div className="flex h-full w-[260px] flex-none flex-col bg-[#171717]">
+      {/* New Chat Button - ChatGPT style */}
+      <div className="p-2">
         <button
           onClick={handleNewChat}
-          className="group flex w-full items-center gap-3 rounded-lg border border-gray-700 bg-transparent px-3 py-2.5 transition-all hover:bg-gray-800"
+          className="group flex w-full items-center gap-2 rounded-lg px-3 py-3 text-sm text-gray-200 transition-colors hover:bg-[#2f2f2f]"
         >
-          <Plus className="h-4 w-4 text-gray-300" />
-          <span className="flex-1 text-left text-sm font-medium text-gray-300">
-            New chat
-          </span>
+          <Plus className="h-4 w-4" />
+          <span className="font-medium">New chat</span>
         </button>
       </div>
 
       {/* Chat History Section */}
-      <div className="flex flex-1 flex-col overflow-hidden px-2">
-        <button
-          onClick={() => setIsHistoryExpanded(!isHistoryExpanded)}
-          className="mb-1 flex items-center gap-2 rounded-lg px-2 py-2 text-xs font-medium text-gray-500 transition-colors hover:text-gray-400"
-        >
-          <Clock className="h-3.5 w-3.5" />
-          <span className="flex-1 text-left">Your searches</span>
-          <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isHistoryExpanded ? '' : '-rotate-90'}`} />
-        </button>
-
-        {isHistoryExpanded && (
-          <div className="flex-1 space-y-0.5 overflow-y-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-gray-700">
-            {chatHistory.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-8 text-center">
-                <MessageSquare className="mb-2 h-5 w-5 text-gray-600" />
-                <p className="text-xs text-gray-500">No recent searches</p>
-              </div>
-            ) : (
-              chatHistory.map((chat) => (
-                <button
-                  key={chat.id}
-                  onClick={() => handleSelectChat(chat.id)}
-                  className={`group flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left transition-all ${
-                    currentChatId === chat.id
-                      ? "bg-gray-800"
-                      : "hover:bg-gray-800/50"
-                  }`}
-                >
-                  <MessageSquare className="h-4 w-4 flex-shrink-0 text-gray-500" />
-                  <div className="flex flex-1 flex-col min-w-0">
-                    <span className="truncate text-sm text-gray-300">
-                      {chat.title}
-                    </span>
-                    <span className="text-xs text-gray-500">
-                      {formatTimestamp(chat.timestamp)}
-                    </span>
-                  </div>
-                  <button
-                    onClick={(e) => handleDeleteChat(e, chat.id)}
-                    className="flex-shrink-0 rounded p-1 opacity-0 transition-opacity hover:bg-gray-700 group-hover:opacity-100"
-                  >
-                    <Trash2 className="h-3.5 w-3.5 text-gray-500 hover:text-red-400" />
-                  </button>
-                </button>
-              ))
-            )}
+      <div className="flex-1 overflow-y-auto px-2 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-gray-700">
+        {chatHistory.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-8 text-center">
+            <p className="text-xs text-gray-500">No conversation history</p>
           </div>
+        ) : (
+          Object.entries(groupedChats).map(([period, chats]) => 
+            chats.length > 0 && (
+              <div key={period} className="mb-2">
+                <div className="sticky top-0 bg-[#171717] px-3 py-2">
+                  <span className="text-xs font-medium text-gray-500">{period}</span>
+                </div>
+                <div className="space-y-0.5">
+                  {chats.map((chat) => (
+                    <button
+                      key={chat.id}
+                      onClick={() => handleSelectChat(chat.id)}
+                      onMouseEnter={() => setHoveredChatId(chat.id)}
+                      onMouseLeave={() => setHoveredChatId(null)}
+                      className={`group relative flex w-full items-center rounded-lg px-3 py-2 text-left transition-colors ${
+                        currentChatId === chat.id
+                          ? "bg-[#2f2f2f]"
+                          : "hover:bg-[#2f2f2f]/50"
+                      }`}
+                    >
+                      <span className="flex-1 truncate text-sm text-gray-300">
+                        {chat.title}
+                      </span>
+                      
+                      {/* Actions on hover */}
+                      {(hoveredChatId === chat.id || currentChatId === chat.id) && (
+                        <div className="absolute right-2 flex items-center gap-1">
+                          <button
+                            onClick={(e) => handleDeleteChat(e, chat.id)}
+                            className="rounded p-1 text-gray-400 transition-colors hover:bg-[#404040] hover:text-red-400"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )
+          )
         )}
       </div>
 
-      {/* Footer */}
-      <div className="border-t border-gray-800 p-3">
-        <div className="flex items-center gap-2 rounded-lg px-2 py-2" style={{background: 'linear-gradient(to right, #3ce98a20, #abedc920)'}}>
-          <div className="h-2 w-2 animate-pulse rounded-full bg-[#3ce98a]" />
-          <span className="text-xs text-[#5feb9b]">AI Travel Agent Ready</span>
+      {/* Footer - Status indicator */}
+      <div className="border-t border-[#2f2f2f] p-3">
+        <div className="flex items-center gap-2 rounded-lg bg-gradient-to-r from-[#3ce98a]/10 to-transparent px-3 py-2.5">
+          <div className="relative">
+            <div className="h-2 w-2 rounded-full bg-[#3ce98a]" />
+            <div className="absolute inset-0 h-2 w-2 animate-ping rounded-full bg-[#3ce98a] opacity-50" />
+          </div>
+          <span className="text-xs font-medium text-[#3ce98a]">Travel Agent Ready</span>
         </div>
       </div>
     </div>

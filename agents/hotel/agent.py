@@ -98,24 +98,32 @@ class HotelSearchAgent:
         Parse hotel search request from message.
         
         Supports formats:
+        - "location:San Diego check_in:2026-01-15 check_out:2026-01-22"
         - "location:Tokyo check_in:2026-01-15 check_out:2026-01-22"
+        
+        Handles multi-word locations like "San Diego", "New York", "Las Vegas"
         """
+        import re
         params = {}
         
-        # Try parsing key:value format
-        parts = message.split()
-        for part in parts:
-            if ":" in part:
-                key, value = part.split(":", 1)
-                key = key.lower().strip()
-                value = value.strip()
-                
-                if key in ["location", "city", "destination"]:
-                    params["location"] = value
-                elif key in ["check_in", "checkin", "start"]:
-                    params["check_in"] = value
-                elif key in ["check_out", "checkout", "end"]:
-                    params["check_out"] = value
+        # Use regex to parse key:value pairs, handling multi-word values
+        # Pattern: key:value where value continues until the next key: or end
+        # This properly handles "location:San Diego check_in:2026-03-13"
+        
+        # Extract location (can have spaces)
+        location_match = re.search(r'location:([^:]+?)(?:\s+(?:check_in|check_out|checkin|checkout|start|end):|\s*$)', message, re.IGNORECASE)
+        if location_match:
+            params["location"] = location_match.group(1).strip()
+        
+        # Extract check_in date
+        check_in_match = re.search(r'(?:check_in|checkin|start):(\S+)', message, re.IGNORECASE)
+        if check_in_match:
+            params["check_in"] = check_in_match.group(1).strip()
+        
+        # Extract check_out date
+        check_out_match = re.search(r'(?:check_out|checkout|end):(\S+)', message, re.IGNORECASE)
+        if check_out_match:
+            params["check_out"] = check_out_match.group(1).strip()
         
         return params
     

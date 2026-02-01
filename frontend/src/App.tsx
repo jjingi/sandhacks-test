@@ -22,6 +22,7 @@ import { Message } from "./types/message"
 import { getGraphConfig } from "@/utils/graphConfigs"
 import { PATTERNS, PatternType } from "@/utils/patternUtils"
 import TravelResponseCard from "@/components/Chat/TravelResponseCard"
+import { Plane } from "lucide-react"
 
 interface ApiResponse {
   response: string
@@ -54,11 +55,23 @@ const App: React.FC = () => {
   const [isAgentLoading, setIsAgentLoading] = useState<boolean>(false)
   const [apiError, setApiError] = useState<boolean>(false)
   const [showFinalResponse, setShowFinalResponse] = useState<boolean>(false)
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true)
   
   // Chat history state
   const [currentChatId, setCurrentChatId] = useState<string | null>(null)
   const [chatHistory, setChatHistory] = useState<ChatHistoryItem[]>([])
   const [conversationMessages, setConversationMessages] = useState<Array<{role: 'user' | 'assistant', content: string}>>([])
+
+  // Ref for scrolling to bottom
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }
+
+  useEffect(() => {
+    scrollToBottom()
+  }, [conversationMessages, isAgentLoading])
 
   // Load chat history from localStorage on mount
   useEffect(() => {
@@ -125,16 +138,14 @@ const App: React.FC = () => {
     setCurrentUserMessage(query)
     setIsAgentLoading(true)
     setButtonClicked(true)
-    setAiReplied(false) // Reset so animation plays
+    setAiReplied(false)
     setApiError(false)
     setShowFinalResponse(true)
 
-    // Add user message to conversation
     const userMessage = { role: 'user' as const, content: query }
     const newMessages = [...conversationMessages, userMessage]
     setConversationMessages(newMessages)
 
-    // Actually send the message to the API
     try {
       const response = await sendMessage(query, selectedPattern)
       handleApiResponse(response, false, query, newMessages)
@@ -145,7 +156,6 @@ const App: React.FC = () => {
     }
   }
 
-  // Accepts ApiResponse or string (for error fallback), but always sets ApiResponse
   const handleApiResponse = useCallback(
     (response: ApiResponse | string, isError: boolean = false, userQuery?: string, currentMessages?: Array<{role: 'user' | 'assistant', content: string}>) => {
       let apiResp: ApiResponse
@@ -156,27 +166,23 @@ const App: React.FC = () => {
       }
       setAgentResponse(apiResp)
       setIsAgentLoading(false)
-      setAiReplied(true) // Mark as replied to stop animation
+      setAiReplied(true)
       setApiError(isError)
 
-      // Add assistant response to conversation
       const assistantMessage = { role: 'assistant' as const, content: apiResp.response }
       const messagesToUse = currentMessages || conversationMessages
       const updatedMessages = [...messagesToUse, assistantMessage]
       setConversationMessages(updatedMessages)
 
-      // Update or create chat history
       const queryToUse = userQuery || currentUserMessage
       if (queryToUse) {
         if (currentChatId) {
-          // Update existing chat
           setChatHistory(prev => prev.map(chat => 
             chat.id === currentChatId 
               ? { ...chat, messages: updatedMessages, timestamp: new Date() }
               : chat
           ))
         } else {
-          // Create new chat
           const title = queryToUse.length > 35 
             ? queryToUse.substring(0, 35) + "..." 
             : queryToUse
@@ -209,26 +215,7 @@ const App: React.FC = () => {
   )
 
   const handleDropdownSelect = async (query: string) => {
-    setCurrentUserMessage(query)
-    setIsAgentLoading(true)
-    setButtonClicked(true)
-    setAiReplied(false) // Reset so animation plays
-    setApiError(false)
-    setShowFinalResponse(true)
-
-    // Add user message to conversation
-    const userMessage = { role: 'user' as const, content: query }
-    const newMessages = [...conversationMessages, userMessage]
-    setConversationMessages(newMessages)
-
-    try {
-      const response = await sendMessage(query, selectedPattern)
-      handleApiResponse(response, false, query, newMessages)
-    } catch (error) {
-      logger.apiError("/agent/prompt", error)
-      const errMessage = error instanceof Error ? error.message : String(error)
-      handleApiResponse(errMessage, true, query, newMessages)
-    }
+    handleUserInput(query)
   }
 
   const handleClearConversation = () => {
@@ -256,14 +243,12 @@ const App: React.FC = () => {
     handleClearConversation()
   }
 
-  // Handle selecting a chat from history
   const handleSelectChat = (chatId: string) => {
     const selectedChat = chatHistory.find(chat => chat.id === chatId)
     if (selectedChat && selectedChat.messages.length > 0) {
       setCurrentChatId(chatId)
       setConversationMessages(selectedChat.messages)
       
-      // Find the last user message and last assistant response
       const lastUserMsg = [...selectedChat.messages].reverse().find(m => m.role === 'user')
       const lastAssistantMsg = [...selectedChat.messages].reverse().find(m => m.role === 'assistant')
       
@@ -279,7 +264,6 @@ const App: React.FC = () => {
     }
   }
 
-  // Handle deleting a chat
   const handleDeleteChat = (chatId: string) => {
     setChatHistory(prev => prev.filter(chat => chat.id !== chatId))
     if (currentChatId === chatId) {
@@ -287,17 +271,17 @@ const App: React.FC = () => {
     }
   }
 
-  // Determine if we should show the graph
-  // Show graph when: no messages (new chat), or when loading (animation)
-  const showGraph = conversationMessages.length === 0 || isAgentLoading
-  
+  const handleToggleSidebar = () => {
+    setIsSidebarOpen(!isSidebarOpen)
+  }
+
   // Show welcome section only when it's a fresh new chat (no messages)
   const showWelcome = conversationMessages.length === 0
 
   return (
     <ThemeProvider>
       <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#212121]">
-        <Navigation />
+        <Navigation onToggleSidebar={handleToggleSidebar} isSidebarOpen={isSidebarOpen} />
         <div className="flex flex-1 overflow-hidden">
           <Sidebar
             selectedPattern={selectedPattern}
@@ -307,8 +291,9 @@ const App: React.FC = () => {
             onDeleteChat={handleDeleteChat}
             chatHistory={chatHistory}
             currentChatId={currentChatId}
+            isOpen={isSidebarOpen}
           />
-          <div className="flex flex-1 flex-col border-l border-gray-800 bg-[#212121]">
+          <div className={`flex flex-1 flex-col bg-[#212121] ${isSidebarOpen ? 'border-l border-gray-800' : ''}`}>
             {/* Main content area - scrollable */}
             <div className="relative flex-1 overflow-y-auto">
               {/* New Chat Welcome View - Graph + Welcome Section */}
@@ -331,17 +316,9 @@ const App: React.FC = () => {
                   
                   {/* Welcome Section */}
                   <div className="flex flex-col items-center justify-center px-4 pb-4">
-                    {/* Airplane Icon - tilted for dynamic look */}
+                    {/* Airplane Icon - same orientation as logo */}
                     <div className="mb-4">
-                      <svg 
-                        className="h-12 w-12 text-[#3ce98a] -rotate-45" 
-                        viewBox="0 0 24 24" 
-                        fill="none" 
-                        stroke="currentColor" 
-                        strokeWidth="2"
-                      >
-                        <path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z" />
-                      </svg>
+                      <Plane className="h-12 w-12 text-[#3ce98a]" strokeWidth={2} />
                     </div>
                     
                     {/* Welcome Text */}
@@ -372,56 +349,47 @@ const App: React.FC = () => {
                 </div>
               )}
 
-              {/* Conversation Messages - shown when there are messages */}
+              {/* Conversation Messages - ChatGPT style */}
               {conversationMessages.length > 0 && (
-                <div className="flex flex-col items-center px-4 py-6 sm:px-8 md:px-16 lg:px-[120px]">
-                  <div className="w-full max-w-[800px] space-y-6">
-                    {/* Render all conversation messages */}
-                    {conversationMessages.map((msg, index) => (
-                      <div key={index} className="flex items-start gap-3">
-                        {msg.role === 'user' ? (
-                          <>
-                            <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-gray-600">
-                              <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                              </svg>
-                            </div>
-                            <div className="flex-1 text-sm text-gray-100">{msg.content}</div>
-                          </>
-                        ) : (
-                          <>
-                            <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full" style={{background: 'linear-gradient(135deg, #3ce98a, #5feb9b)'}}>
-                              <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                              </svg>
-                            </div>
-                            <div className="flex-1 text-sm">
-                              <TravelResponseCard content={msg.content} />
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    ))}
-
-                    {/* Loading indicator for new response */}
-                    {isAgentLoading && (
-                      <div className="flex items-start gap-3">
-                        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full" style={{background: 'linear-gradient(135deg, #3ce98a, #5feb9b)'}}>
-                          <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                          </svg>
-                        </div>
-                        <div className="flex-1 text-sm text-gray-200">
-                          <div className="flex items-center gap-2 text-[#5feb9b]">
-                            <div className="h-2 w-2 animate-bounce rounded-full bg-[#3ce98a] [animation-delay:-0.3s]"></div>
-                            <div className="h-2 w-2 animate-bounce rounded-full bg-[#5feb9b] [animation-delay:-0.15s]"></div>
-                            <div className="h-2 w-2 animate-bounce rounded-full bg-[#7becac]"></div>
-                            <span className="ml-2">Searching for the best deals...</span>
+                <div className="mx-auto w-full max-w-[768px] px-4 py-6">
+                  {conversationMessages.map((msg, index) => (
+                    <div key={index} className="mb-6">
+                      {msg.role === 'user' ? (
+                        /* User Message - right aligned bubble */
+                        <div className="flex justify-end">
+                          <div className="max-w-[85%] rounded-3xl bg-[#2f2f2f] px-5 py-3 text-[15px] text-gray-100">
+                            {msg.content}
                           </div>
                         </div>
+                      ) : (
+                        /* Assistant Message - left aligned with avatar */
+                        <div className="flex items-start gap-4">
+                          <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full" style={{background: 'linear-gradient(135deg, #3ce98a, #5feb9b)'}}>
+                            <Plane className="h-4 w-4 text-white" />
+                          </div>
+                          <div className="flex-1 pt-1 text-[15px]">
+                            <TravelResponseCard content={msg.content} />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {/* Loading indicator */}
+                  {isAgentLoading && (
+                    <div className="mb-6 flex items-start gap-4">
+                      <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full" style={{background: 'linear-gradient(135deg, #3ce98a, #5feb9b)'}}>
+                        <Plane className="h-4 w-4 text-white" />
                       </div>
-                    )}
-                  </div>
+                      <div className="flex items-center gap-1 pt-3">
+                        <div className="h-2 w-2 animate-bounce rounded-full bg-[#3ce98a] [animation-delay:-0.3s]" />
+                        <div className="h-2 w-2 animate-bounce rounded-full bg-[#5feb9b] [animation-delay:-0.15s]" />
+                        <div className="h-2 w-2 animate-bounce rounded-full bg-[#7becac]" />
+                      </div>
+                    </div>
+                  )}
+
+                  <div ref={messagesEndRef} />
                 </div>
               )}
             </div>

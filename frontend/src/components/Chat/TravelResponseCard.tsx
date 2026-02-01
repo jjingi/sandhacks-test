@@ -24,9 +24,9 @@ const detectResponseType = (content: string): 'full_trip' | 'flights_only' | 'ho
     return 'full_trip'
   }
   
-  // Flight-only: Has "Flights:" header with list of flights
+  // Flight-only: Has "Flights:" header with flight options (card style)
   if ((content.includes('One-Way Flights:') || content.includes('Round-Trip Flights:')) && 
-      content.includes('Here are the best flight options')) {
+      (content.includes('Here are the top') || content.includes('flight options'))) {
     return 'flights_only'
   }
   
@@ -155,96 +155,100 @@ const parseFullTripResponse = (content: string) => {
   return sections
 }
 
-// Parse flight-only response
+// Parse flight-only response (card style with outbound/return sections)
 const parseFlightsOnlyResponse = (content: string) => {
   const result: {
     title: string
     route: string
+    reverseRoute: string
     date: string
     isOneWay: boolean
-    flights: Array<{
-      rank: number
-      airline: string
+    flightOptions: Array<{
+      optionNumber: number
       price: string
-      departure: string
-      arrival: string
-      duration: string
-      stops: string
-      layover?: string
-      returnInfo?: string
+      priceType: string
+      outbound: Record<string, string>
+      returnFlight?: Record<string, string>
     }>
   } = {
     title: '',
     route: '',
+    reverseRoute: '',
     date: '',
     isOneWay: true,
-    flights: []
+    flightOptions: []
   }
 
   const lines = content.split('\n')
-  let currentFlight: any = null
+  let currentOption: any = null
+  let currentSection = ''
 
   for (const line of lines) {
     const trimmed = line.trim()
+    if (!trimmed) continue
     
-    // Parse header
+    // Parse header: ✈️ **Round-Trip Flights: SJC → NRT**
     if (trimmed.includes('Flights:')) {
       result.title = trimmed.replace(/[✈️*]/g, '').trim()
       result.isOneWay = trimmed.includes('One-Way')
       const routeMatch = trimmed.match(/:\s*([A-Z]{3})\s*→\s*([A-Z]{3})/)
-      if (routeMatch) result.route = `${routeMatch[1]} → ${routeMatch[2]}`
+      if (routeMatch) {
+        result.route = `${routeMatch[1]} → ${routeMatch[2]}`
+        result.reverseRoute = `${routeMatch[2]} → ${routeMatch[1]}`
+      }
     }
     
     // Parse date
-    if (trimmed.startsWith('Date:') || trimmed.startsWith('Dates:')) {
-      result.date = trimmed.replace(/^Dates?:\s*/, '').trim()
+    if (trimmed.startsWith('**Date**:') || trimmed.startsWith('**Dates**:')) {
+      result.date = trimmed.replace(/^\*\*Dates?\*\*:\s*/, '').trim()
     }
     
-    // Parse flight entry: **1. Airline** - $price
-    const flightMatch = trimmed.match(/\*\*(\d+)\.\s*([^*]+)\*\*\s*-\s*\$([\d.]+)/)
-    if (flightMatch) {
-      if (currentFlight) result.flights.push(currentFlight)
-      currentFlight = {
-        rank: parseInt(flightMatch[1]),
-        airline: flightMatch[2].trim(),
-        price: `$${flightMatch[3]}`,
-        departure: '',
-        arrival: '',
-        duration: '',
-        stops: ''
+    // Parse option header: **Option 1** - $1253.00 (round-trip)
+    const optionMatch = trimmed.match(/\*\*Option\s*(\d+)\*\*\s*-\s*\$([\d.]+)\s*\(([^)]+)\)/)
+    if (optionMatch) {
+      if (currentOption) result.flightOptions.push(currentOption)
+      currentOption = {
+        optionNumber: parseInt(optionMatch[1]),
+        price: `$${optionMatch[2]}`,
+        priceType: optionMatch[3],
+        outbound: {},
+        returnFlight: undefined
       }
+      currentSection = ''
+      continue
     }
     
-    // Parse departure/arrival: 🛫 date time → 🛬 date time
-    if (currentFlight && (trimmed.includes('🛫') || trimmed.includes('→'))) {
-      const timeMatch = trimmed.match(/🛫\s*([^\s→]+(?:\s+[\d:]+)?)\s*→\s*🛬\s*(.+)/)
-      if (timeMatch) {
-        currentFlight.departure = timeMatch[1].trim()
-        currentFlight.arrival = timeMatch[2].trim()
+    // Detect outbound flight section
+    if (trimmed.includes('🛫') && trimmed.includes('Outbound Flight')) {
+      currentSection = 'outbound'
+      if (currentOption) currentOption.outbound = {}
+      continue
+    }
+    
+    // Detect return flight section
+    if (trimmed.includes('🛬') && trimmed.includes('Return Flight')) {
+      currentSection = 'return'
+      if (currentOption) currentOption.returnFlight = {}
+      continue
+    }
+    
+    // Parse flight details: - **Key**: Value
+    if (currentOption && trimmed.startsWith('-')) {
+      const detailMatch = trimmed.match(/-\s*\*\*([^*]+)\*\*:\s*(.+)/)
+      if (detailMatch) {
+        const key = detailMatch[1].toLowerCase().trim()
+        const value = detailMatch[2].trim()
+        
+        if (currentSection === 'outbound') {
+          currentOption.outbound[key] = value
+        } else if (currentSection === 'return' && currentOption.returnFlight) {
+          currentOption.returnFlight[key] = value
+        }
       }
-    }
-    
-    // Parse duration/stops: ⏱️ Xh Xm | X stop(s)
-    if (currentFlight && trimmed.includes('⏱️')) {
-      const durationMatch = trimmed.match(/⏱️\s*([^|]+)/)
-      if (durationMatch) currentFlight.duration = durationMatch[1].trim()
-      const stopsMatch = trimmed.match(/\|\s*(.+)$/)
-      if (stopsMatch) currentFlight.stops = stopsMatch[1].trim()
-    }
-    
-    // Parse layover: 🔄 Layover: XXX
-    if (currentFlight && trimmed.includes('🔄')) {
-      const layoverMatch = trimmed.match(/🔄\s*Layover:\s*(.+)/)
-      if (layoverMatch) currentFlight.layover = layoverMatch[1].trim()
-    }
-    
-    // Parse return flight: 🔙 Return: ...
-    if (currentFlight && trimmed.includes('🔙')) {
-      currentFlight.returnInfo = trimmed.replace('🔙', '').trim()
     }
   }
   
-  if (currentFlight) result.flights.push(currentFlight)
+  if (currentOption) result.flightOptions.push(currentOption)
   
   return result
 }
@@ -410,6 +414,13 @@ const formatDateTime = (dateStr: string): string => {
   return dateStr
 }
 
+// Format date ranges and individual dates from YYYY-MM-DD to MM-DD-YYYY
+const formatDateRange = (dateStr: string): string => {
+  if (!dateStr) return ''
+  // Replace all occurrences of YYYY-MM-DD pattern
+  return dateStr.replace(/(\d{4})-(\d{2})-(\d{2})/g, (_, year, month, day) => `${month}-${day}-${year}`)
+}
+
 const parseFlightLine = (line: string, obj: Record<string, string>) => {
   const cleaned = line.replace(/^-\s*/, '').replace(/\*\*/g, '').trim()
   if (cleaned.includes('Airline:')) obj.airline = extractAfterFirstColon(cleaned)
@@ -567,7 +578,7 @@ const FullTripCard: React.FC<{ content: string }> = ({ content }) => {
   )
 }
 
-// Flights Only Card Component
+// Flights Only Card Component - Card style similar to full trip
 const FlightsOnlyCard: React.FC<{ content: string }> = ({ content }) => {
   const data = parseFlightsOnlyResponse(content)
 
@@ -580,58 +591,139 @@ const FlightsOnlyCard: React.FC<{ content: string }> = ({ content }) => {
         </div>
         <div>
           <p className="font-semibold text-white">{data.isOneWay ? 'One-Way' : 'Round-Trip'} Flights: {data.route}</p>
-          <p className="text-sm text-blue-400">{data.date}</p>
+          <p className="text-sm text-blue-400">{formatDateRange(data.date)}</p>
         </div>
       </div>
 
-      {/* Flight List */}
-      <div className="space-y-3">
-        {data.flights.slice(0, 10).map((flight, idx) => (
-          <div key={idx} className="rounded-xl bg-[#2a2a2a] border border-gray-700 overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 bg-[#333]">
-              <div className="flex items-center gap-3">
-                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-500/20 text-blue-400 text-xs font-bold">
-                  {flight.rank}
+      {/* Flight Options - Card style like full trip */}
+      <div className="space-y-6">
+        {data.flightOptions.map((option, idx) => (
+          <div key={idx} className="space-y-3">
+            {/* Option Header */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500 text-white text-sm font-bold">
+                  {option.optionNumber}
                 </span>
-                <span className="font-medium text-white">{flight.airline}</span>
+                <span className="text-white font-medium">Option {option.optionNumber}</span>
               </div>
-              <span className="rounded-full bg-[#3ce98a]/20 px-3 py-1 text-sm font-semibold text-[#5feb9b]">
-                {flight.price}
+              <span className="rounded-full bg-[#3ce98a]/20 px-4 py-1.5 text-sm font-semibold text-[#5feb9b]">
+                {option.price} ({option.priceType})
               </span>
             </div>
-            <div className="p-4 space-y-3">
-              {/* Times */}
-              <div className="flex items-center justify-between">
-                <div className="text-center">
-                  <p className="text-lg font-bold text-white">{flight.departure.split(' ').pop() || flight.departure}</p>
-                  <p className="text-xs text-gray-500">Departure</p>
+
+            {/* Outbound Flight Card */}
+            {option.outbound && Object.keys(option.outbound).length > 0 && (
+              <div className="rounded-xl bg-[#2a2a2a] border border-gray-700 overflow-hidden">
+                <div className="flex items-center justify-between bg-gradient-to-r from-blue-500/20 to-transparent px-4 py-3 border-b border-gray-700">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">🛫</span>
+                    <h3 className="font-semibold text-white">Outbound Flight</h3>
+                  </div>
+                  <span className="rounded-full bg-[#3ce98a]/20 px-3 py-1 text-sm font-semibold text-[#5feb9b]">
+                    {option.price}
+                  </span>
                 </div>
-                <div className="flex-1 flex items-center justify-center px-4">
-                  <div className="h-px flex-1 bg-gray-600"></div>
-                  <div className="px-2 text-xs text-gray-400">{flight.duration}</div>
-                  <div className="h-px flex-1 bg-gray-600"></div>
-                </div>
-                <div className="text-center">
-                  <p className="text-lg font-bold text-white">{flight.arrival.split(' ').pop() || flight.arrival}</p>
-                  <p className="text-xs text-gray-500">Arrival</p>
+                <div className="p-4 space-y-3 text-sm">
+                  <div className="flex items-center justify-between">
+                    {option.outbound.airline && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-500">Airline:</span>
+                        <span className="text-white font-medium">{option.outbound.airline}</span>
+                      </div>
+                    )}
+                    {option.outbound.stops && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-500">Stops:</span>
+                        <span className={`font-medium ${option.outbound.stops.includes('0') || option.outbound.stops.toLowerCase().includes('non-stop') ? 'text-[#5feb9b]' : 'text-yellow-400'}`}>
+                          {option.outbound.stops}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 pt-2 border-t border-gray-700">
+                    {option.outbound.departure && (
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-1.5 text-gray-500">
+                          <Calendar className="h-3.5 w-3.5" />
+                          <span className="text-xs uppercase tracking-wide">Departure</span>
+                        </div>
+                        <p className="text-white font-medium">{formatDateTime(option.outbound.departure)}</p>
+                      </div>
+                    )}
+                    {option.outbound.arrival && (
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-1.5 text-gray-500">
+                          <Clock className="h-3.5 w-3.5" />
+                          <span className="text-xs uppercase tracking-wide">Arrival</span>
+                        </div>
+                        <p className="text-white font-medium">{formatDateTime(option.outbound.arrival)}</p>
+                      </div>
+                    )}
+                  </div>
+                  {option.outbound.layover && (
+                    <div className="pt-2 border-t border-gray-700 text-gray-400">
+                      🔄 Layover: {option.outbound.layover}
+                    </div>
+                  )}
                 </div>
               </div>
-              {/* Stops & Layover */}
-              <div className="flex items-center justify-between text-sm">
-                <span className={`${flight.stops.includes('Non-stop') ? 'text-[#5feb9b]' : 'text-yellow-400'}`}>
-                  {flight.stops}
-                </span>
-                {flight.layover && (
-                  <span className="text-gray-400">🔄 Layover: {flight.layover}</span>
-                )}
-              </div>
-              {/* Return info */}
-              {flight.returnInfo && (
-                <div className="pt-2 border-t border-gray-700 text-sm text-gray-400">
-                  {flight.returnInfo}
+            )}
+
+            {/* Return Flight Card - only for round-trip */}
+            {!data.isOneWay && option.returnFlight && Object.keys(option.returnFlight).length > 0 && (
+              <div className="rounded-xl bg-[#2a2a2a] border border-gray-700 overflow-hidden">
+                <div className="flex items-center justify-between bg-gradient-to-r from-purple-500/20 to-transparent px-4 py-3 border-b border-gray-700">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">🛬</span>
+                    <h3 className="font-semibold text-white">Return Flight</h3>
+                  </div>
                 </div>
-              )}
-            </div>
+                <div className="p-4 space-y-3 text-sm">
+                  <div className="flex items-center justify-between">
+                    {option.returnFlight.airline && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-500">Airline:</span>
+                        <span className="text-white font-medium">{option.returnFlight.airline}</span>
+                      </div>
+                    )}
+                    {option.returnFlight.stops && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-500">Stops:</span>
+                        <span className={`font-medium ${option.returnFlight.stops.includes('0') || option.returnFlight.stops.toLowerCase().includes('non-stop') ? 'text-[#5feb9b]' : 'text-yellow-400'}`}>
+                          {option.returnFlight.stops}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 pt-2 border-t border-gray-700">
+                    {option.returnFlight.departure && (
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-1.5 text-gray-500">
+                          <Calendar className="h-3.5 w-3.5" />
+                          <span className="text-xs uppercase tracking-wide">Departure</span>
+                        </div>
+                        <p className="text-white font-medium">{formatDateTime(option.returnFlight.departure)}</p>
+                      </div>
+                    )}
+                    {option.returnFlight.arrival && (
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-1.5 text-gray-500">
+                          <Clock className="h-3.5 w-3.5" />
+                          <span className="text-xs uppercase tracking-wide">Arrival</span>
+                        </div>
+                        <p className="text-white font-medium">{formatDateTime(option.returnFlight.arrival)}</p>
+                      </div>
+                    )}
+                  </div>
+                  {option.returnFlight.layover && (
+                    <div className="pt-2 border-t border-gray-700 text-gray-400">
+                      🔄 Layover: {option.returnFlight.layover}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -652,7 +744,7 @@ const HotelsOnlyCard: React.FC<{ content: string }> = ({ content }) => {
         </div>
         <div>
           <p className="font-semibold text-white">Top Hotels in {data.location}</p>
-          <p className="text-sm text-purple-400">{data.dates}</p>
+          <p className="text-sm text-purple-400">{formatDateRange(data.dates)}</p>
         </div>
       </div>
 

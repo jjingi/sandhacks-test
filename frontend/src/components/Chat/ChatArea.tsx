@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  **/
 
-import React, { useState } from "react"
+import React, { useState, useRef, useEffect } from "react"
 import { Message } from "@/types/message"
-import { Plane, Send } from "lucide-react"
+import { ArrowUp } from "lucide-react"
 import CoffeePromptsDropdown from "./Prompts/CoffeePromptsDropdown"
 import LogisticsPromptsDropdown from "./Prompts/LogisticsPromptsDropdown"
 import { useAgentAPI } from "@/hooks/useAgentAPI"
@@ -58,7 +58,7 @@ interface ChatAreaProps {
     apiError: boolean
     chatRef?: React.RefObject<HTMLDivElement | null>
     auctionState?: any
-    grafanaUrl?: string // Add this prop if you want to pass the URL dynamically
+    grafanaUrl?: string
 }
 
 const ChatArea: React.FC<ChatAreaProps> = ({
@@ -92,7 +92,16 @@ const ChatArea: React.FC<ChatAreaProps> = ({
     const [content, setContent] = useState<string>("")
     const [loading, setLoading] = useState<boolean>(false)
     const [isMinimized, setIsMinimized] = useState<boolean>(false)
+    const textareaRef = useRef<HTMLTextAreaElement>(null)
     const { sendMessageWithCallback } = useAgentAPI()
+
+    // Auto-resize textarea
+    useEffect(() => {
+        if (textareaRef.current) {
+            textareaRef.current.style.height = 'auto'
+            textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px'
+        }
+    }, [content])
 
     const handleMinimize = () => {
         setIsMinimized(true)
@@ -155,8 +164,6 @@ const ChatArea: React.FC<ChatAreaProps> = ({
             setIsMinimized(false)
         }
 
-        // If onUserInput is provided (from App.tsx), use it and return
-        // App.tsx handles the API call and response
         if (onUserInput) {
             const messageContent = content
             setContent("")
@@ -172,14 +179,13 @@ const ChatArea: React.FC<ChatAreaProps> = ({
         }
     }
 
-    const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
         if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault()
             processMessage()
         }
     }
 
-    // Build the Grafana URL with session_id if available
     const groupSessionId = useGroupSessionId()
     const sessionIdForUrl = agentResponse?.session_id || groupSessionId
 
@@ -187,20 +193,20 @@ const ChatArea: React.FC<ChatAreaProps> = ({
         ? `${grafanaUrl}${GRAFANA_DASHBOARD_PATH}${encodeURIComponent(sessionIdForUrl)}`
         : grafanaUrl
 
-
     if (!isBottomLayout) {
         return null
     }
+
+    const isDisabled = loading || isAgentLoading
 
     return (
         <div
             ref={chatRef}
             className="relative flex w-full flex-col bg-[#212121]"
         >
-            {/* Input area - always visible at bottom */}
             <div className="flex w-full flex-col items-center gap-3 px-4 py-4">
                 {showCoffeePrompts && (
-                    <div className="relative z-10 flex w-full max-w-[680px] justify-center">
+                    <div className="relative z-10 flex w-full max-w-[768px] justify-center">
                         <CoffeePromptsDropdown
                             visible={true}
                             onSelect={handleDropdownQuery}
@@ -209,43 +215,45 @@ const ChatArea: React.FC<ChatAreaProps> = ({
                     </div>
                 )}
 
-                {/* Clean pill-shaped input box */}
-                <div className="flex w-full max-w-[680px] flex-col items-stretch">
-                    <div className="relative flex h-[52px] items-center rounded-full border border-gray-700/50 bg-[#303030] px-5 transition-all focus-within:border-gray-600">
-                        <input
-                            className="h-full min-w-0 flex-1 border-none bg-transparent text-[15px] font-normal text-gray-100 outline-none placeholder:text-gray-500"
-                            placeholder="Ask anything"
+                {/* ChatGPT-style input container */}
+                <div className="w-full max-w-[768px]">
+                    <div className="relative flex flex-col rounded-2xl border border-[#424242] bg-[#2f2f2f] shadow-lg transition-all focus-within:border-[#5a5a5a]">
+                        {/* Textarea */}
+                        <textarea
+                            ref={textareaRef}
+                            className="max-h-[200px] min-h-[52px] w-full resize-none bg-transparent px-4 py-3.5 pr-14 text-[15px] leading-6 text-gray-100 outline-none placeholder:text-gray-500"
+                            placeholder="Message Travel AGNTCY..."
                             value={content}
-                            onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                                setContent(e.target.value)
-                            }
-                            onKeyPress={handleKeyPress}
-                            disabled={loading || isAgentLoading}
+                            onChange={(e) => setContent(e.target.value)}
+                            onKeyDown={handleKeyDown}
+                            disabled={isDisabled}
+                            rows={1}
                         />
-                        {/* Tilted send arrow icon */}
-                        <button
-                            onClick={() => {
-                                if (content.trim() && !loading && !isAgentLoading) {
-                                    processMessage()
-                                }
-                            }}
-                            disabled={!content.trim() || loading || isAgentLoading}
-                            className="flex cursor-pointer items-center justify-center border-none bg-transparent p-2 transition-all disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                            <svg 
-                                className={`h-5 w-5 -rotate-45 ${content.trim() ? 'text-gray-300' : 'text-gray-500'}`}
-                                viewBox="0 0 24 24" 
-                                fill="none" 
-                                stroke="currentColor" 
-                                strokeWidth="2"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
+                        
+                        {/* Send button */}
+                        <div className="absolute bottom-2.5 right-3">
+                            <button
+                                onClick={() => {
+                                    if (content.trim() && !isDisabled) {
+                                        processMessage()
+                                    }
+                                }}
+                                disabled={!content.trim() || isDisabled}
+                                className={`flex h-8 w-8 items-center justify-center rounded-lg transition-all ${
+                                    content.trim() && !isDisabled
+                                        ? 'bg-white text-black hover:bg-gray-200'
+                                        : 'bg-[#424242] text-gray-500 cursor-not-allowed'
+                                }`}
                             >
-                                <path d="M22 2L11 13" />
-                                <path d="M22 2L15 22L11 13L2 9L22 2Z" />
-                            </svg>
-                        </button>
+                                <ArrowUp className="h-5 w-5" strokeWidth={2.5} />
+                            </button>
+                        </div>
                     </div>
+
+                    {/* Footer text */}
+                    <p className="mt-2 text-center text-xs text-gray-500">
+                        Travel AGNTCY can make mistakes. Consider verifying important information.
+                    </p>
                 </div>
             </div>
         </div>
