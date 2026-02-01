@@ -1,0 +1,266 @@
+# Travel Agent Docker Compose Configuration
+#
+# This compose file sets up the Travel Planning Agent environment.
+# The travel agent finds the cheapest flight + hotel combinations using SerpAPI.
+#
+# Services:
+# - travel-supervisor: Main travel planning agent (port 8000)
+# - ui: Frontend web interface (port 3000)
+# - nats: Message transport for agent communication
+# - Observability stack: ClickHouse, OTEL, Grafana
+#
+# Usage:
+#   docker-compose up -d              # Start all services
+#   docker-compose logs -f travel-supervisor  # View agent logs
+#   docker-compose down               # Stop all services
+
+services:
+  # =============================================================================
+  # Travel Supervisor Agent
+  # =============================================================================
+  # Main travel planning agent that searches for flights and hotels
+  travel-supervisor:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.travel-supervisor
+    image: travel-supervisor:latest
+    container_name: travel-supervisor
+    env_file:
+      - .env
+    environment:
+      # Transport settings (NATS for simple setup)
+      - DEFAULT_MESSAGE_TRANSPORT=${DEFAULT_MESSAGE_TRANSPORT:-NATS}
+      - TRANSPORT_SERVER_ENDPOINT=${TRANSPORT_SERVER_ENDPOINT:-nats://nats:4222}
+      # Observability
+      - OTLP_HTTP_ENDPOINT=${OTLP_HTTP_ENDPOINT:-http://otel-collector:4318}
+      # Identity auth (disabled by default for travel agent)
+      - IDENTITY_AUTH_ENABLED=${IDENTITY_AUTH_ENABLED:-false}
+      - IDENTITY_SERVICE_API_KEY=${IDENTITY_SERVICE_API_KEY_TRAVEL_SUPERVISOR:-dummy_api_key}
+      # SerpAPI configuration (required for travel search)
+      - SERPAPI_API_KEY=${SERPAPI_API_KEY}
+      - TRAVEL_HOTEL_CHECKIN_GAP_HOURS=${TRAVEL_HOTEL_CHECKIN_GAP_HOURS:-2}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - nats
+
+  # =============================================================================
+  # Message Transport
+  # =============================================================================
+  # NATS server for agent communication
+  nats:
+    image: nats:latest
+    container_name: lungo-nats
+    ports:
+      - "4222:4222"
+      - "4223:4223"
+      - "6222:6222"
+      - "8222:8222"
+
+  # SLIM transport (alternative to NATS, required for group conversations)
+  slim:
+    image: ghcr.io/agntcy/slim:0.6.1
+    container_name: lungo-slim
+    ports:
+      - "46357:46357"
+    environment:
+      - PASSWORD=${SLIM_GATEWAY_PASSWORD:-dummy_password}
+      - CONFIG_PATH=/config.yaml
+    volumes:
+      - ./config/docker/slim/server-config.yaml:/config.yaml
+    command: ["/slim", "--config", "/config.yaml"]
+
+  # =============================================================================
+  # Frontend UI
+  # =============================================================================
+  # Web interface for interacting with the travel agent
+  ui:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ui
+    image: lungo-ui:latest
+    container_name: lungo-ui
+    environment:
+      # Travel supervisor API URL
+      - VITE_EXCHANGE_APP_API_URL=http://127.0.0.1:8000
+      - VITE_GRAFANA_URL=http://127.0.0.1:3001
+    depends_on:
+      - travel-supervisor
+    ports:
+      - "3000:3000"
+
+  # =============================================================================
+  # Observability Stack
+  # =============================================================================
+  # ClickHouse for storing traces and metrics
+  clickhouse-server:
+    image: clickhouse/clickhouse-server
+    container_name: lungo-clickhouse-server
+    ports:
+      - "9000:9000"
+      - "8123:8123"
+    environment:
+      CLICKHOUSE_USER: admin
+      CLICKHOUSE_PASSWORD: admin
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8123/ping",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # OpenTelemetry collector for trace aggregation
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: lungo-otel-collector
+    restart: unless-stopped
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    volumes:
+      - ./config/docker/otel/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    command: ["--config", "/etc/otel-collector-config.yaml"]
+    depends_on:
+      clickhouse-server:
+        condition: service_healthy
+
+  # Grafana for visualization and dashboards
+  grafana:
+    image: grafana/grafana
+    container_name: grafana-lungo
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    volumes:
+      - ./config/docker/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
+      - ./config/docker/grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml
+      - ./config/docker/grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      clickhouse-server:
+        condition: service_healthy
+
+  # =============================================================================
+  # Metrics and Analytics
+  # =============================================================================
+  # MCE API layer for observability data
+  mce-api-layer:
+    image: ghcr.io/agntcy/obs-api:0.1.1
+    container_name: lungo-mce-api-layer
+    ports:
+      - "8080:8080"
+    environment:
+      - CLICKHOUSE_URL=clickhouse-server
+      - CLICKHOUSE_PORT=9000
+      - CLICKHOUSE_USER=admin
+      - CLICKHOUSE_PASS=admin
+      - CLICKHOUSE_DB=default
+      - SERVER_PORT=8080
+      - PORT=8080
+    depends_on:
+      clickhouse-server:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/keepAlive"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Metrics Computation Engine for advanced analytics
+  metrics-computation-engine:
+    image: ghcr.io/agntcy/mce:1.2.1
+    container_name: lungo-metrics-computation-engine
+    ports:
+      - "8001:8000"
+    environment:
+      - API_BASE_URL=http://mce-api-layer:8080
+      - LLM_BASE_MODEL_URL=${AZURE_API_BASE:-${OPENAI_ENDPOINT}}
+      - LLM_MODEL_NAME=${AZURE_API_VERSION:-${OPENAI_MODEL_NAME}}
+      - LLM_API_KEY=${AZURE_API_KEY:-${OPENAI_API_KEY}}
+    depends_on:
+      mce-api-layer:
+        condition: service_healthy
+
+  # =============================================================================
+  # Agent Directory Services
+  # =============================================================================
+  # Directory API server for agent registry
+  dir-api-server:
+    image: ghcr.io/agntcy/dir-apiserver:v0.6.0
+    container_name: dir-api-server
+    env_file:
+      - ./config/docker/dir/apiserver.env
+    ports:
+      - 8888:8888
+      - 8889:8889
+    depends_on:
+      - zot
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://127.0.0.1:8889/healthz/ready || exit 1
+      interval: 10s
+      retries: 60
+      start_period: 10s
+
+  # Directory MCP server
+  dir-mcp-server:
+    image: ghcr.io/agntcy/dir-ctl:latest
+    container_name: dir-mcp-server
+    stdin_open: true
+    tty: false
+    command: ["mcp", "serve"]
+    environment:
+      - DIRECTORY_CLIENT_SERVER_ADDRESS=dir-api-server:8888
+      - DIRECTORY_CLIENT_TLS_SKIP_VERIFY=true
+      - OASF_API_VALIDATION_DISABLE=true
+    depends_on:
+      - dir-api-server
+
+  # Zot OCI registry for agent artifacts
+  zot:
+    image: ghcr.io/project-zot/zot:v2.1.10
+    container_name: zot
+    ports:
+      - 5555:5000
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: curl -f http://localhost:5000/v2/ || exit 1
+      interval: 5s
+      retries: 60
+      start_period: 15s
+
+  # OASF translation service (optional)
+  oasf-translation-service:
+    image: ghcr.io/agntcy/oasf-sdk:v0.0.14
+    container_name: oasf-translation-service
+    ports:
+      - "31234:31234"
+    profiles:
+      - oasf-translate
