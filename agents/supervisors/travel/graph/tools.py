@@ -28,6 +28,7 @@ from agntcy_app_sdk.semantic.a2a.protocol import A2AProtocol
 
 from agents.flight.card import AGENT_CARD as FLIGHT_AGENT_CARD
 from agents.hotel.card import AGENT_CARD as HOTEL_AGENT_CARD
+from agents.activity.card import AGENT_CARD as ACTIVITY_AGENT_CARD
 from agents.supervisors.travel.graph.shared import get_factory
 from config.config import (
     DEFAULT_MESSAGE_TRANSPORT,
@@ -313,6 +314,65 @@ async def get_hotels_via_a2a(location: str, check_in_date: str, check_out_date: 
             return []
     except json.JSONDecodeError:
         logger.error(f"Failed to parse hotel results: {result_json}")
+        return []
+
+
+# =============================================================================
+# Activity Search Functions (A2A communication with Activity Agent)
+# =============================================================================
+
+async def _search_activities_internal(location: str, activity_type: str = "things to do") -> str:
+    """
+    Search for activities using the Activity Search Agent via A2A.
+    
+    Args:
+        location: City or area name (e.g., "San Jose, CA", "Tokyo")
+        activity_type: Type of activities to search for (default: "things to do")
+        
+    Returns:
+        JSON string with activity results
+    """
+    logger.info(f"Sending A2A request to Activity Agent: {location}")
+    
+    # Format message for the activity agent
+    # Replace spaces with underscores in location to handle parsing
+    location_formatted = location.replace(" ", "_")
+    message = f"location:{location_formatted} type:{activity_type.replace(' ', '_')}"
+    
+    try:
+        result = await _send_a2a_message(ACTIVITY_AGENT_CARD, message)
+        return result
+    except A2AAgentError as e:
+        logger.error(f"Activity search A2A error: {e}")
+        return json.dumps({"status": "error", "message": str(e)})
+
+
+async def get_activities_via_a2a(location: str, activity_type: str = "things to do") -> list:
+    """
+    Get activities via A2A and parse the response.
+    
+    This is the main function called by the Travel Supervisor graph
+    to search for activities through the Activity Agent.
+    
+    Args:
+        location: City name (e.g., "San Jose, CA", "Tokyo, Japan")
+        activity_type: Type of activities (default: "things to do")
+    
+    Returns:
+        List of activity dictionaries with name, rating, address, etc.
+    """
+    # Use the internal function (not the @tool decorated version)
+    result_json = await _search_activities_internal(location, activity_type)
+    
+    try:
+        result = json.loads(result_json)
+        if result.get("status") == "success":
+            return result.get("activities", [])
+        else:
+            logger.error(f"Activity search failed: {result.get('message')}")
+            return []
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse activity results: {result_json}")
         return []
 
 

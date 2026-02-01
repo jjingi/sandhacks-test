@@ -27,8 +27,8 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.graph import MessagesState, StateGraph, END
 from ioa_observe.sdk.decorators import agent, graph
 
-# Import A2A tools for communicating with Flight and Hotel agents
-from agents.supervisors.travel.graph.tools import get_flights_via_a2a, get_hotels_via_a2a
+# Import A2A tools for communicating with Flight, Hotel, and Activity agents
+from agents.supervisors.travel.graph.tools import get_flights_via_a2a, get_hotels_via_a2a, get_activities_via_a2a
 from agents.travel.travel_logic import find_cheapest_plan
 from agents.supervisors.travel.graph.models import TravelSearchArgs
 from common.llm import get_llm
@@ -303,8 +303,18 @@ Respond with ONLY 'travel_search' or 'general':""",
                     f"Try searching for an earlier departure date or a later check-in time."
                 )]}
 
-            # Step 5: Format and return the result
-            response = self._format_travel_plan(plan, params)
+            # Step 5: Search for activities at the destination (optional - don't fail if unavailable)
+            activities = []
+            try:
+                logger.info(f"Sending A2A request to Activity Search Agent for location: {hotel_location}")
+                activities = await get_activities_via_a2a(hotel_location, "things to do")
+                logger.info(f"Found {len(activities)} activities at {hotel_location}")
+            except Exception as e:
+                logger.warning(f"Activity search failed (continuing without activities): {e}")
+                activities = []
+
+            # Step 6: Format and return the result with activities
+            response = self._format_travel_plan(plan, params, activities)
             return {"messages": [AIMessage(content=response)], "full_response": response}
 
         except Exception as e:
@@ -576,12 +586,20 @@ IMPORTANT RULES:
         
         return params
 
-    def _format_travel_plan(self, plan: dict, params: TravelSearchArgs) -> str:
+    def _format_travel_plan(self, plan: dict, params: TravelSearchArgs, activities: list = None) -> str:
         """
         Format a travel plan with markdown-style sections: total cost,
         outbound flight, return flight (with full details when available),
-        hotel details, and trip summary.
+        hotel details, activities, and trip summary.
+        
+        Args:
+            plan: Travel plan with flight and hotel info
+            params: Travel search parameters
+            activities: Optional list of activities at the destination
         """
+        if activities is None:
+            activities = []
+            
         flight = plan["flight"]
         hotel = plan["hotel"]
         return_flight = flight.get("return_flight")
@@ -656,7 +674,30 @@ IMPORTANT RULES:
 - **Overall Rating**: {rating_display}
 - **Location Rating**: {location_display}
 - **Check-in**: {hotel.get('check_in_time', '3:00 PM')}
+"""
 
+        # Add activities section if activities were found
+        if activities:
+            response += f"""
+---
+
+🎯 **Things to Do in {params.destination_city or params.destination}**
+"""
+            # Show top 5 activities
+            for i, activity in enumerate(activities[:5], 1):
+                name = activity.get('name', 'Unknown')
+                rating = activity.get('rating', 0)
+                reviews = activity.get('reviews', 0)
+                activity_type = activity.get('type', '')
+                
+                # Format rating with stars
+                rating_str = f"⭐ {rating}" if rating else ""
+                reviews_str = f"({reviews} reviews)" if reviews else ""
+                type_str = f" - {activity_type}" if activity_type else ""
+                
+                response += f"- **{name}**{type_str} {rating_str} {reviews_str}\n"
+
+        response += f"""
 ---
 
 📋 **Trip Summary**
