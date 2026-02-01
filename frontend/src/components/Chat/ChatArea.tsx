@@ -13,6 +13,7 @@ import UserMessage from "./UserMessage"
 import ChatHeader from "./ChatHeader"
 import AgentIcon from "@/assets/Coffee_Icon.svg"
 import { useGroupSessionId } from "@/stores/groupStreamingStore"
+import { useStreamingSessionId } from "@/stores/auctionStreamingStore"
 
 import grafanaIcon from "@/assets/grafana.svg"
 import ExternalLinkButton from "./ExternalLinkButton"
@@ -174,7 +175,8 @@ const ChatArea: React.FC<ChatAreaProps> = ({
 
     // Build the Grafana URL with session_id if available
     const groupSessionId = useGroupSessionId()
-    const sessionIdForUrl = agentResponse?.session_id || groupSessionId
+    const streamingSessionId = useStreamingSessionId()
+    const sessionIdForUrl = agentResponse?.session_id || groupSessionId || streamingSessionId
 
     const grafanaSessionUrl = sessionIdForUrl
         ? `${grafanaUrl}${GRAFANA_DASHBOARD_PATH}${encodeURIComponent(sessionIdForUrl)}`

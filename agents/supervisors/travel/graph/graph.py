@@ -313,8 +313,8 @@ Respond with ONLY 'travel_search' or 'general':""",
         Extract travel parameters from user message using LLM structured output.
         
         Uses the TravelSearchArgs model to ensure proper extraction of:
-        - Origin city/airport
-        - Destination city/airport
+        - Origin city/airport (converted to airport code)
+        - Destination city/airport (converted to airport code)
         - Start date
         - End date
         
@@ -322,30 +322,167 @@ Respond with ONLY 'travel_search' or 'general':""",
             user_message: Raw user input string
         
         Returns:
-            TravelSearchArgs with extracted parameters
+            TravelSearchArgs with extracted parameters (airport codes normalized)
         """
-        extraction_llm = get_llm(streaming=False).with_structured_output(TravelSearchArgs, strict=True)
+        extraction_llm = get_llm(streaming=False).with_structured_output(TravelSearchArgs, strict=False)
         
         # Get current year for date parsing context
         current_year = datetime.now().year
         
+        # Prompt the LLM to extract AND convert to airport codes
         prompt = f"""Extract travel search parameters from the user's message.
 
 Current year for reference: {current_year}
 
 User message: {user_message}
 
-Rules:
+IMPORTANT RULES:
 - For dates, convert to YYYY-MM-DD format (e.g., "Jan 15" → "{current_year}-01-15")
 - If year is not specified, assume {current_year} or {current_year + 1} (whichever makes sense)
-- Airport codes should be uppercase (e.g., "LAX", "JFK", "NRT")
-- City names are acceptable for both origin and destination
+- ALWAYS convert origin and destination to 3-letter IATA airport codes:
+  * "Los Angeles" or "LA" → "LAX"
+  * "New York" or "NYC" → "JFK" (or "EWR" or "LGA")
+  * "Tokyo" → "NRT" (Narita) or "HND" (Haneda)
+  * "Paris" → "CDG"
+  * "London" → "LHR"
+  * "San Francisco" or "SF" → "SFO"
+  * "Chicago" → "ORD"
+  * "Dallas" → "DFW"
+  * "Miami" → "MIA"
+  * "Seattle" → "SEA"
+  * "Boston" → "BOS"
+  * "Atlanta" → "ATL"
+  * "Denver" → "DEN"
+  * "Las Vegas" → "LAS"
+  * "Orlando" → "MCO"
+  * "Hong Kong" → "HKG"
+  * "Singapore" → "SIN"
+  * "Sydney" → "SYD"
+  * "Dubai" → "DXB"
+  * "Seoul" → "ICN"
+  * "Bangkok" → "BKK"
+  * "Rome" → "FCO"
+  * "Amsterdam" → "AMS"
+  * "Frankfurt" → "FRA"
+  * "Toronto" → "YYZ"
+  * "Vancouver" → "YVR"
+  * "Mexico City" → "MEX"
+  * "Cancun" → "CUN"
+- If already an airport code, use it as-is (uppercase)
 - Set has_all_params to true ONLY if origin, destination, start_date, AND end_date are all present
 - List missing parameters in missing_params field"""
 
         result = await extraction_llm.ainvoke(prompt)
         logger.info(f"Extracted params: {result}")
+        
+        # Post-process: Apply fallback city-to-airport mapping if needed
+        result = self._normalize_airport_codes(result)
+        
         return result
+    
+    def _normalize_airport_codes(self, params: TravelSearchArgs) -> TravelSearchArgs:
+        """
+        Normalize city names to airport codes using a fallback mapping.
+        
+        This handles cases where the LLM returns a city name instead of airport code.
+        
+        Args:
+            params: Extracted travel parameters
+            
+        Returns:
+            Parameters with normalized airport codes
+        """
+        # Common city name to airport code mapping (fallback)
+        city_to_airport = {
+            "tokyo": "NRT",
+            "paris": "CDG",
+            "london": "LHR",
+            "new york": "JFK",
+            "nyc": "JFK",
+            "los angeles": "LAX",
+            "la": "LAX",
+            "san francisco": "SFO",
+            "sf": "SFO",
+            "chicago": "ORD",
+            "dallas": "DFW",
+            "miami": "MIA",
+            "seattle": "SEA",
+            "boston": "BOS",
+            "atlanta": "ATL",
+            "denver": "DEN",
+            "las vegas": "LAS",
+            "orlando": "MCO",
+            "hong kong": "HKG",
+            "singapore": "SIN",
+            "sydney": "SYD",
+            "dubai": "DXB",
+            "seoul": "ICN",
+            "bangkok": "BKK",
+            "rome": "FCO",
+            "amsterdam": "AMS",
+            "frankfurt": "FRA",
+            "toronto": "YYZ",
+            "vancouver": "YVR",
+            "mexico city": "MEX",
+            "cancun": "CUN",
+            "osaka": "KIX",
+            "beijing": "PEK",
+            "shanghai": "PVG",
+            "mumbai": "BOM",
+            "delhi": "DEL",
+            "madrid": "MAD",
+            "barcelona": "BCN",
+            "berlin": "BER",
+            "munich": "MUC",
+            "zurich": "ZRH",
+            "vienna": "VIE",
+            "lisbon": "LIS",
+            "dublin": "DUB",
+            "moscow": "SVO",
+            "istanbul": "IST",
+            "cairo": "CAI",
+            "johannesburg": "JNB",
+            "cape town": "CPT",
+            "nairobi": "NBO",
+            "auckland": "AKL",
+            "melbourne": "MEL",
+            "brisbane": "BNE",
+            "honolulu": "HNL",
+            "austin": "AUS",
+            "phoenix": "PHX",
+            "philadelphia": "PHL",
+            "washington": "DCA",
+            "washington dc": "DCA",
+            "detroit": "DTW",
+            "minneapolis": "MSP",
+            "portland": "PDX",
+            "san diego": "SAN",
+            "tampa": "TPA",
+            "charlotte": "CLT",
+            "houston": "IAH",
+        }
+        
+        # Check if origin needs conversion
+        if params.origin:
+            origin_lower = params.origin.lower().strip()
+            if origin_lower in city_to_airport:
+                logger.info(f"Converting origin '{params.origin}' to '{city_to_airport[origin_lower]}'")
+                params.origin = city_to_airport[origin_lower]
+            else:
+                # Make sure it's uppercase (might already be an airport code)
+                params.origin = params.origin.upper().strip()
+        
+        # Check if destination needs conversion
+        if params.destination:
+            dest_lower = params.destination.lower().strip()
+            if dest_lower in city_to_airport:
+                logger.info(f"Converting destination '{params.destination}' to '{city_to_airport[dest_lower]}'")
+                params.destination = city_to_airport[dest_lower]
+            else:
+                # Make sure it's uppercase (might already be an airport code)
+                params.destination = params.destination.upper().strip()
+        
+        return params
 
     def _format_travel_plan(self, plan: dict, params: TravelSearchArgs) -> str:
         """

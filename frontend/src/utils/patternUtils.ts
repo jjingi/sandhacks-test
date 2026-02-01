@@ -14,6 +14,10 @@ export const PATTERNS = {
   TRAVEL_SEARCH: "travel_search",
   // Streaming travel search with real-time updates
   TRAVEL_SEARCH_STREAMING: "travel_search_streaming",
+  // Legacy patterns (kept for backward compatibility, but not used)
+  PUBLISH_SUBSCRIBE: "publish_subscribe",
+  PUBLISH_SUBSCRIBE_STREAMING: "publish_subscribe_streaming",
+  GROUP_COMMUNICATION: "group_communication",
 } as const
 
 export type PatternType = (typeof PATTERNS)[keyof typeof PATTERNS]
@@ -42,7 +46,8 @@ export const getApiUrlForPattern = (pattern?: string): string => {
   const TRAVEL_APP_API_URL =
     import.meta.env.VITE_EXCHANGE_APP_API_URL || DEFAULT_TRAVEL_API_URL
 
-  // All travel patterns use the same API URL
+  // All patterns use the travel supervisor API URL (port 8000)
+  // This includes legacy patterns that are mapped to travel functionality
   return TRAVEL_APP_API_URL
 }
 
@@ -57,17 +62,19 @@ export const supportsSSE = (pattern?: string): boolean => {
  * Get the streaming endpoint URL for a pattern
  */
 export const getStreamingEndpointForPattern = (pattern?: string): string => {
-  if (pattern === PATTERNS.TRAVEL_SEARCH_STREAMING) {
-    return `${getApiUrlForPattern(pattern)}/agent/prompt/stream`
-  }
-  throw new Error(`Pattern ${pattern} does not support streaming`)
+  // All streaming patterns use the same travel supervisor endpoint
+  return `${getApiUrlForPattern(pattern)}/agent/prompt/stream`
 }
 
 /**
  * Check if a pattern uses streaming responses
  */
 export const isStreamingPattern = (pattern?: string): boolean => {
-  return pattern === PATTERNS.TRAVEL_SEARCH_STREAMING
+  return (
+    pattern === PATTERNS.TRAVEL_SEARCH_STREAMING ||
+    pattern === PATTERNS.PUBLISH_SUBSCRIBE_STREAMING ||
+    pattern === PATTERNS.GROUP_COMMUNICATION
+  )
 }
 
 /**
@@ -88,6 +95,12 @@ export const getPatternDisplayName = (pattern?: string): string => {
     case PATTERNS.TRAVEL_SEARCH:
       return "Travel Search"
     case PATTERNS.TRAVEL_SEARCH_STREAMING:
+      return "Travel Search: Streaming"
+    case PATTERNS.PUBLISH_SUBSCRIBE:
+      return "Travel Search"
+    case PATTERNS.PUBLISH_SUBSCRIBE_STREAMING:
+      return "Travel Search: Streaming"
+    case PATTERNS.GROUP_COMMUNICATION:
       return "Travel Search: Streaming"
     default:
       return "Travel Agent"

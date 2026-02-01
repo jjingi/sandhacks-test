@@ -41,7 +41,7 @@ const App: React.FC = () => {
   const { sendMessage } = useAgentAPI()
 
   const [selectedPattern, setSelectedPattern] = useState<PatternType>(
-      PATTERNS.GROUP_COMMUNICATION,
+      PATTERNS.TRAVEL_SEARCH_STREAMING,
   )
 
   const startStreaming = useStartGroupStreaming()

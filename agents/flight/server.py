@@ -4,132 +4,105 @@
 """
 Flight Search Agent Server
 
-A2A server that handles flight search requests from other agents.
-Runs as a FastAPI server with A2A protocol support.
+A2A server for handling flight search requests.
+Uses A2AStarletteApplication for proper A2A protocol support.
+
+Based on the original lungo farm_server.py pattern.
 """
 
-import logging
+import asyncio
 import os
-from contextlib import asynccontextmanager
-
 from dotenv import load_dotenv
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
+from uvicorn import Config, Server
 
-from agntcy_app_sdk.factory import AgntcyFactory
 from agntcy_app_sdk.semantic.a2a.protocol import A2AProtocol
+from agntcy_app_sdk.app_sessions import AppContainer
+from agntcy_app_sdk.factory import AgntcyFactory
+from a2a.server.apps import A2AStarletteApplication
+from a2a.server.tasks import InMemoryTaskStore
+from a2a.server.request_handlers import DefaultRequestHandler
 
+from agents.flight.agent_executor import FlightAgentExecutor
 from agents.flight.card import AGENT_CARD
-from agents.flight.agent import FlightSearchAgent
 from config.config import (
     DEFAULT_MESSAGE_TRANSPORT,
     TRANSPORT_SERVER_ENDPOINT,
     ENABLE_HTTP,
 )
-from config.logging_config import setup_logging
 
-# Setup logging
-setup_logging()
-logger = logging.getLogger("lungo.flight.server")
 load_dotenv()
 
-# Global instances
-factory = None
-a2a_server = None
-flight_agent = None
+# Initialize factory with tracing (same pattern as original)
+factory = AgntcyFactory("lungo.flight_agent", enable_tracing=True)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """
-    Application lifespan manager.
-    Starts the A2A server on startup and cleans up on shutdown.
-    """
-    global factory, a2a_server, flight_agent
-    
-    logger.info("Starting Flight Search Agent server...")
-    
-    # Initialize the flight agent
-    flight_agent = FlightSearchAgent()
-    
-    # Create the Agntcy factory
-    factory = AgntcyFactory("lungo.flight_agent", enable_tracing=True)
-    
-    # Create transport
-    transport = factory.create_transport(
-        DEFAULT_MESSAGE_TRANSPORT,
-        endpoint=TRANSPORT_SERVER_ENDPOINT,
-        name="default/default/flight_agent",
+async def run_http_server(server):
+    """Run the HTTP/REST server."""
+    try:
+        port = int(os.getenv("FLIGHT_AGENT_PORT", "9001"))
+        config = Config(app=server.build(), host="0.0.0.0", port=port, loop="asyncio")
+        userver = Server(config)
+        await userver.serve()
+    except Exception as e:
+        print(f"HTTP server encountered an error: {e}")
+
+
+async def run_transport(server, transport_type, endpoint):
+    """Run the transport and message bridge."""
+    try:
+        personal_topic = A2AProtocol.create_agent_topic(AGENT_CARD)
+        transport = factory.create_transport(
+            transport_type, 
+            endpoint=endpoint, 
+            name=f"default/default/{personal_topic}"
+        )
+
+        # Create an application session (same pattern as original)
+        app_session = factory.create_app_session(max_sessions=1)
+        
+        # Add container for personal topic
+        app_session.add_app_container("private_session", AppContainer(
+            server,
+            transport=transport,
+            topic=personal_topic,
+        ))
+
+        await app_session.start_session("private_session")
+
+    except Exception as e:
+        print(f"Transport encountered an error: {e}")
+        await app_session.stop_all_sessions()
+
+
+async def main(enable_http: bool):
+    """Run the A2A server with both HTTP and transport logic."""
+    request_handler = DefaultRequestHandler(
+        agent_executor=FlightAgentExecutor(),
+        task_store=InMemoryTaskStore(),
     )
-    
-    # Create A2A server
-    a2a_server = await factory.create_server(
-        "A2A",
-        agent_topic=A2AProtocol.create_agent_topic(AGENT_CARD),
-        transport=transport,
-        agent_card=AGENT_CARD,
+
+    server = A2AStarletteApplication(
+        agent_card=AGENT_CARD, 
+        http_handler=request_handler
     )
+
+    # Run HTTP server and transport logic concurrently (same pattern as original)
+    tasks = []
+    if enable_http:
+        tasks.append(asyncio.create_task(run_http_server(server)))
+    tasks.append(asyncio.create_task(run_transport(
+        server, 
+        DEFAULT_MESSAGE_TRANSPORT, 
+        TRANSPORT_SERVER_ENDPOINT
+    )))
     
-    # Register message handler
-    async def handle_message(message: str) -> str:
-        """Handle incoming A2A messages."""
-        logger.info(f"Received A2A message: {message}")
-        result = await flight_agent.ainvoke(message)
-        logger.info(f"Sending response: {result[:100]}...")
-        return result
-    
-    a2a_server.register_handler(handle_message)
-    
-    # Start the A2A server
-    await a2a_server.start()
-    logger.info(f"Flight Agent A2A server started on transport: {DEFAULT_MESSAGE_TRANSPORT}")
-    
-    yield
-    
-    # Cleanup
-    logger.info("Shutting down Flight Search Agent server...")
-    if a2a_server:
-        await a2a_server.stop()
+    await asyncio.gather(*tasks)
 
 
-# Create FastAPI app
-app = FastAPI(
-    title="Flight Search Agent",
-    description="A2A agent for searching flights using SerpAPI",
-    lifespan=lifespan,
-)
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    return {"status": "ok", "agent": "flight_search"}
-
-
-@app.get("/.well-known/agent.json")
-async def get_agent_card():
-    """Return the A2A agent card."""
-    return AGENT_CARD.model_dump()
-
-
-if __name__ == "__main__":
-    port = int(os.getenv("FLIGHT_AGENT_PORT", "9001"))
-    host = os.getenv("FLIGHT_AGENT_HOST", "0.0.0.0")
-    
-    logger.info(f"Starting Flight Agent on {host}:{port}")
-    uvicorn.run(
-        "agents.flight.server:app",
-        host=host,
-        port=port,
-        reload=True,
-    )
+if __name__ == '__main__':
+    try:
+        asyncio.run(main(ENABLE_HTTP))
+    except KeyboardInterrupt:
+        print("\nShutting down gracefully on keyboard interrupt.")
+    except Exception as e:
+        print(f"Error occurred: {e}")

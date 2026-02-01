@@ -83,7 +83,12 @@ def filter_valid_hotels(
     - Arrive at hotel in time for check-in
     
     Timing constraint:
-        hotel_check_in_datetime >= flight_arrival + gap_hours
+        Hotels allow check-in ANYTIME AFTER their stated check-in time.
+        So if check-in starts at 3 PM and traveler arrives at 5 PM + 2h gap = 7 PM,
+        that's valid because 3 PM has already passed.
+        
+        Valid condition: hotel_check_in_time <= traveler_arrival_at_hotel
+        AND traveler_arrival_at_hotel <= reasonable_cutoff (midnight)
     
     Args:
         hotels: List of hotel dictionaries with check_in_date and check_in_time
@@ -98,18 +103,21 @@ def filter_valid_hotels(
         >>> flight_arrival = datetime(2026, 1, 15, 18, 30)  # 6:30 PM arrival
         >>> hotels = [{"check_in_time": "15:00", ...}, {"check_in_time": "20:00", ...}]
         >>> valid = filter_valid_hotels(hotels, flight_arrival, gap_hours=2)
-        >>> # Only hotels with check-in >= 8:30 PM are valid
+        >>> # Hotel with 15:00 check-in is valid (traveler arrives at hotel ~8:30 PM, check-in started at 3 PM)
+        >>> # Hotel with 20:00 check-in is valid (traveler arrives at hotel ~8:30 PM, check-in started at 8 PM)
     """
     if gap_hours is None:
         gap_hours = TRAVEL_HOTEL_CHECKIN_GAP_HOURS
     
-    # Calculate minimum acceptable check-in time
-    # Traveler needs at least gap_hours after flight arrival
-    min_checkin_time = flight_arrival + timedelta(hours=gap_hours)
+    # Calculate when traveler actually arrives at hotel
+    traveler_hotel_arrival = flight_arrival + timedelta(hours=gap_hours)
+    
+    # Reasonable cutoff - traveler should arrive at hotel before midnight
+    midnight_cutoff = datetime.combine(flight_arrival.date(), datetime.strptime("23:59", "%H:%M").time())
     
     logger.info(
         f"Filtering hotels: flight arrives {flight_arrival.strftime('%Y-%m-%d %H:%M')}, "
-        f"min check-in: {min_checkin_time.strftime('%Y-%m-%d %H:%M')} (gap: {gap_hours}h)"
+        f"traveler reaches hotel by {traveler_hotel_arrival.strftime('%Y-%m-%d %H:%M')} (gap: {gap_hours}h)"
     )
     
     valid_hotels = []
@@ -118,18 +126,33 @@ def filter_valid_hotels(
         hotel_checkin_datetime = _get_hotel_checkin_datetime(hotel, flight_arrival)
         
         if hotel_checkin_datetime is None:
-            # If we can't determine check-in time, skip this hotel
-            logger.warning(f"Could not determine check-in time for hotel: {hotel.get('name')}")
+            # If we can't determine check-in time, include it anyway (be permissive)
+            logger.warning(f"Could not determine check-in time for hotel: {hotel.get('name')}, including anyway")
+            valid_hotels.append(hotel)
             continue
         
-        # Check if hotel check-in is after minimum required time
-        if hotel_checkin_datetime >= min_checkin_time:
+        # Check if:
+        # 1. Hotel check-in has started by the time traveler arrives (check-in time <= traveler arrival)
+        # 2. Traveler arrives before midnight (reasonable cutoff)
+        # 
+        # Hotels allow check-in ANYTIME AFTER the stated check-in time.
+        # So if hotel says "check-in: 3 PM" and traveler arrives at 8 PM, that's valid.
+        checkin_has_started = hotel_checkin_datetime.time() <= traveler_hotel_arrival.time()
+        arrives_before_midnight = traveler_hotel_arrival <= midnight_cutoff
+        
+        # Also allow same-day arrivals where traveler arrives after check-in time
+        same_day_valid = (
+            flight_arrival.date() == hotel_checkin_datetime.date() and
+            traveler_hotel_arrival.time() >= hotel_checkin_datetime.time()
+        )
+        
+        if (checkin_has_started and arrives_before_midnight) or same_day_valid:
             valid_hotels.append(hotel)
-            logger.debug(f"Hotel '{hotel.get('name')}' is valid (check-in: {hotel_checkin_datetime})")
+            logger.debug(f"Hotel '{hotel.get('name')}' is valid (check-in starts: {hotel_checkin_datetime.time()}, traveler arrives: {traveler_hotel_arrival.time()})")
         else:
             logger.debug(
-                f"Hotel '{hotel.get('name')}' excluded - check-in {hotel_checkin_datetime} "
-                f"is before minimum {min_checkin_time}"
+                f"Hotel '{hotel.get('name')}' excluded - check-in starts {hotel_checkin_datetime.time()}, "
+                f"traveler would arrive at {traveler_hotel_arrival.time()}"
             )
     
     logger.info(f"Filtered {len(valid_hotels)} valid hotels from {len(hotels)} total")
